@@ -1,0 +1,102 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (VST3 + Standalone)
+            os: windows-latest
+            configure: cmake -S . -B build -A x64 -DOJU_BUILD_TESTS=ON
+            tests: build/OJUTests_artefacts/Release/OJUTests.exe
+            artefacts: build/OJU_artefacts/Release
+            pluginval: https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          - name: macOS universal (VST3 + AU + Standalone)
+            os: macos-latest
+            configure: cmake -S . -B build -G Xcode -DOJU_BUILD_TESTS=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            tests: build/OJUTests_artefacts/Release/OJUTests
+            artefacts: build/OJU_artefacts/Release
+            pluginval: https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          - name: Linux (VST3 + Standalone)
+            os: ubuntu-24.04
+            configure: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOJU_BUILD_TESTS=ON
+            tests: build/OJUTests_artefacts/Release/OJUTests
+            artefacts: build/OJU_artefacts/Release
+            pluginval: https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libgl1-mesa-dev xvfb
+
+      - name: Configure
+        run: ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4 2>&1 | tee build.log
+
+      - name: No warnings in OJU code
+        run: |
+          if grep -E "(Source|Tests)[/\\][^ ]*[: (].*warning" build.log; then
+            echo "::error::Compiler warnings in OJU sources"; exit 1
+          fi
+
+      - name: Tests (DSP, brain, latency, allocations, CPU, state)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a ${{ matrix.tests }} "$PWD"
+          else
+            OJU_SKIP_EDITOR=1 ${{ matrix.tests }} "$PWD"
+          fi
+
+      - name: pluginval (strictness 10)
+        run: |
+          curl -sSL -o pluginval.zip "${{ matrix.pluginval }}"
+          unzip -q -o pluginval.zip -d pluginval
+          case "$RUNNER_OS" in
+            Windows) PV=pluginval/pluginval.exe ;;
+            macOS)   PV=pluginval/pluginval.app/Contents/MacOS/pluginval ;;
+            Linux)   PV=pluginval/pluginval ;;
+          esac
+          RUN=""
+          [ "$RUNNER_OS" = "Linux" ] && RUN="xvfb-run -a"
+          $RUN $PV --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+               "${{ matrix.artefacts }}/VST3/OJU.vst3"
+
+      - name: auval (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "${{ matrix.artefacts }}/AU/OJU.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 5
+          auval -v aufx Ojue Mbyj
+          lipo -archs "${{ matrix.artefacts }}/VST3/OJU.vst3/Contents/MacOS/OJU"
+
+      - name: Upload plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: OJU-${{ runner.os }}
+          path: |
+            ${{ matrix.artefacts }}/VST3
+            ${{ matrix.artefacts }}/AU
+            ${{ matrix.artefacts }}/Standalone
+          if-no-files-found: ignore
