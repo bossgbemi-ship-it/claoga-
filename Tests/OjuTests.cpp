@@ -477,7 +477,7 @@ int main (int argc, char** argv)
     testCpu();
     testStateRoundTrip();
     testMono();
-    if (std::getenv ("OJU_SKIP_EDITOR") == nullptr)
+    if (juce::SystemStats::getEnvironmentVariable ("OJU_SKIP_EDITOR", {}).isEmpty())
         testEditor (outDir);
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

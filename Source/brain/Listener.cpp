@@ -1,4 +1,5 @@
 #include "Listener.h"
+#include <algorithm>
 
 namespace oju
 {
@@ -12,7 +13,7 @@ namespace
         if (v.empty())
             return -100.0f;
         std::sort (v.begin(), v.end());
-        const auto idx = juce::jlimit<size_t> (0, v.size() - 1, (size_t) std::round (p * (float) (v.size() - 1)));
+        const auto idx = std::min (v.size() - 1, (size_t) std::round (p * (float) (v.size() - 1)));
         return v[idx];
     }
 
@@ -85,13 +86,13 @@ namespace
         {
             const double lo = f * std::pow (2.0, -1.0 / 12.0), hi = f * std::pow (2.0, 1.0 / 12.0);
             auto b0 = (size_t) std::ceil (lo / binHz), b1 = (size_t) std::floor (hi / binHz);
-            b1 = juce::jmin (b1, power.size() - 1);
+            b1 = std::min (b1, power.size() - 1);
             double sum = 0.0; int n = 0;
-            for (auto b = juce::jmax<size_t> (1, b0); b <= b1; ++b) { sum += power[b]; ++n; }
+            for (auto b = std::max<size_t> (1, b0); b <= b1; ++b) { sum += power[b]; ++n; }
             if (n == 0)
             {
                 const double pos = f / binHz;
-                const auto i0 = juce::jlimit<size_t> (1, power.size() - 2, (size_t) pos);
+                const auto i0 = std::clamp<size_t> ((size_t) pos, 1, power.size() - 2);
                 const double t = juce::jlimit (0.0, 1.0, pos - (double) i0);
                 sum = power[i0] + t * (power[i0 + 1] - power[i0]);
                 n = 1;
@@ -357,7 +358,7 @@ Features Listener::analyse (const std::vector<float>& audio, const std::vector<c
     for (size_t start = 0; start + (size_t) n <= audio.size(); start += (size_t) hop)
     {
         const size_t f0 = start / (size_t) frameLen;
-        const size_t f1 = juce::jmin (voicedMask.size(), (start + (size_t) n) / (size_t) frameLen);
+        const size_t f1 = std::min (voicedMask.size(), (start + (size_t) n) / (size_t) frameLen);
         int v = 0, total = 0;
         for (size_t k = f0; k < f1; ++k) { v += voicedMask[k]; ++total; }
         if (total == 0 || v * 10 < total * 6)

@@ -215,7 +215,7 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
     std::vector<size_t> order (lines.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
     std::stable_sort (order.begin(), order.end(), [&] (size_t a, size_t b) { return lines[a].weight > lines[b].weight; });
-    order.resize (juce::jmin<size_t> (6, order.size()));
+    order.resize (std::min<size_t> (6, order.size()));
     std::sort (order.begin(), order.end());
     for (auto i : order)
         out.read.add (lines[i].text);
