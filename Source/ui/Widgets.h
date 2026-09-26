@@ -44,7 +44,10 @@ private:
 class SegmentedChoice : public juce::Component
 {
 public:
-    SegmentedChoice (juce::AudioProcessorValueTreeState& state, const juce::String& paramId);
+    // segmentValues (optional): the parameter index each segment selects, e.g. five genres
+    // picked out of a longer style list. labels (optional) override the choice names.
+    SegmentedChoice (juce::AudioProcessorValueTreeState& state, const juce::String& paramId,
+                     std::vector<int> segmentValues = {}, juce::StringArray labels = {});
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -55,6 +58,7 @@ private:
     int indexAt (juce::Point<float> p) const;
 
     juce::StringArray names;
+    std::vector<int> values;
     int selected = 0, hover = -1;
     std::unique_ptr<juce::ParameterAttachment> attachment;
 

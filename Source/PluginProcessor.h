@@ -2,7 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Parameters.h"
-#include "dsp/VocalChain.h"
+#include "dsp/Engine.h"
 #include "brain/Listener.h"
 #include "brain/Brain.h"
 
@@ -59,11 +59,29 @@ public:
 
     // Snapshot of the current (target) settings, for the EQ curve display.
     ChainSettings readSettings() const noexcept;
+    EngineSettings readEngineSettings() const noexcept;
+
+    // OJU 2.0: hear the plain OJU v1 sound (all 2.0 modules off) for comparison.
+    void setV1Compare (bool on) noexcept { v1Compare.store (on); }
+    bool isV1Compare() const noexcept    { return v1Compare.load(); }
     double getCurrentSampleRate() const noexcept { return currentRate.load(); }
     double getHostBpm() const noexcept           { return hostBpm.load(); }
 
-    VocalChain& getChain() noexcept { return chain; }
+    VocalChain& getChain() noexcept { return engine.getChain(); }
+    Engine& getEngine() noexcept    { return engine; }
     juce::AudioProcessorValueTreeState& getState() noexcept { return apvts; }
+
+    // OJU 2.0
+    float getCpuLoad() const noexcept { return cpuLoad.load (std::memory_order_relaxed); }
+    static juce::File presetsDirectory();
+    bool savePreset (const juce::File& file);
+    bool loadPreset (const juce::File& file);
+    void setParameterFromUI (const juce::String& id, float realValue) { setParam (id, realValue); }
+    float getParameterValue (const juce::String& id) const
+    {
+        if (auto* p = apvts.getParameter (id)) return p->convertFrom0to1 (p->getValue());
+        return 0.0f;
+    }
 
     // For tests: process pending analysis/style changes immediately.
     void pumpMessageThreadWork() { timerCallback(); }
@@ -77,10 +95,11 @@ private:
     void applyPendingExtra();
     void refreshExtraCache();
     static juce::ValueTree featuresToTree (const Features& f);
+    static Features neutralFeatures();
     static Features treeToFeatures (const juce::ValueTree& t);
 
     juce::AudioProcessorValueTreeState apvts;
-    VocalChain chain;
+    Engine engine;
     Listener listener;
     juce::AudioBuffer<float> scratch;
 
@@ -94,7 +113,16 @@ private:
         pTameOn, pTameF, pTameAmt,
         pPressOn, pThresh, pRatio, pAttack, pRelease, pMakeup, pParallel,
         pHeatOn, pDrive, pHeatMix,
-        pSpaceOn, pDelayTime, pFeedback, pDelayMix, pVerbSize, pVerbMix;
+        pSpaceOn, pDelayTime, pFeedback, pDelayMix, pVerbSize, pVerbMix,
+        // OJU 2.0
+        pRole, pLatencyMode, pDenoiseOn, pDenoiseAmt, pRoomAmt, pPlosiveOn, pPlosiveAmt,
+        pTuneOn, pTuneKeySource, pTuneKey, pTuneScale, pTuneSpeed, pTuneHumanize, pTuneMix,
+        pDeessAuto, pLevelOn, pLevelAmt, pBreathOn, pBreathAmt, pDoubleOn, pDoubleAmt, pWidth, pHookOnly,
+        pEchoOn, pEchoDuck, pVerbOn, pVerbType, pVerbDuck, pRiderOn, pRiderAmt, pLimiterOn, pLimiterCeiling,
+        pCarveOn, pCarveDepth, pLinkGroup;
+
+    std::atomic<bool> v1Compare { false };
+    std::atomic<float> cpuLoad { 0.0f };
 
     std::atomic<double> hostBpm { 120.0 }, currentRate { 48000.0 };
 

@@ -426,6 +426,23 @@ static void testEditor (const juce::File& outDir)
         check (os.openedOk() && png.writeImageToStream (img, os), "snapshot " + file.getFileName());
     }
 
+    // Module detail views
+    if (auto* oe = dynamic_cast<oju::OjuEditor*> (ed.get()))
+    {
+        ed->setSize (1280, 820);
+        for (int m : { 0, 2, 3, 5, 10, 11 })
+        {
+            oe->showModule (m);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto file = outDir.getChildFile ("oju_module_" + juce::String (m + 1) + ".png");
+            file.deleteFile();
+            juce::FileOutputStream mos (file);
+            juce::PNGImageFormat().writeImageToStream (img, mos);
+        }
+        oe->showModule (13 - 1);   // back to The Read
+    }
+
     // Listening state snapshot
     p->toggleListening();
     for (int k = 0; k < 150; ++k)
@@ -443,6 +460,257 @@ static void testEditor (const juce::File& outDir)
     os.setPosition (0); os.truncate();
     juce::PNGImageFormat().writeImageToStream (img, os);
     ed.reset();
+}
+
+
+//==============================================================================
+// OJU 2.0 module tests
+namespace v2
+{
+    juce::AudioBuffer<float> singer (double sr, float levelDb, double seconds, int chans = 2)
+    {
+        FakeSinger fs (sr, levelDb);
+        juce::AudioBuffer<float> b (chans, (int) (seconds * sr));
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const float v = fs.next();
+            for (int c = 0; c < chans; ++c)
+                b.setSample (c, i, v);
+        }
+        return b;
+    }
+
+    juce::AudioBuffer<float> run (oju::OjuProcessor& p, const juce::AudioBuffer<float>& in, int block, bool& finite)
+    {
+        juce::AudioBuffer<float> out (in);
+        juce::AudioBuffer<float> buf (in.getNumChannels(), block);
+        float peak = 0.0f;
+        for (int pos = 0; pos < in.getNumSamples(); pos += block)
+        {
+            const int n = juce::jmin (block, in.getNumSamples() - pos);
+            buf.setSize (in.getNumChannels(), n, false, false, true);
+            for (int c = 0; c < in.getNumChannels(); ++c)
+                buf.copyFrom (c, 0, in, c, pos, n);
+            finite &= processBlockChecked (p, buf, peak);
+            for (int c = 0; c < in.getNumChannels(); ++c)
+                out.copyFrom (c, pos, buf, c, 0, n);
+            if ((pos / block) % 8 == 0)
+                p.pumpMessageThreadWork();
+        }
+        return out;
+    }
+
+    float rmsDb (const juce::AudioBuffer<float>& b, int start, int len, int ch = 0)
+    {
+        start = juce::jlimit (0, b.getNumSamples() - 1, start);
+        len = juce::jlimit (1, b.getNumSamples() - start, len);
+        return juce::Decibels::gainToDecibels (b.getRMSLevel (ch, start, len), -200.0f);
+    }
+
+    float peakDb (const juce::AudioBuffer<float>& b)
+    {
+        float pk = 0.0f;
+        for (int c = 0; c < b.getNumChannels(); ++c)
+            pk = juce::jmax (pk, b.getMagnitude (c, 0, b.getNumSamples()));
+        return juce::Decibels::gainToDecibels (pk, -200.0f);
+    }
+
+    // Everything off, so a test hears only the module it switches on.
+    void neutral (oju::OjuProcessor& p)
+    {
+        for (auto* id : { oju::ids::lowCutOn, oju::ids::eqOn, oju::ids::tameOn, oju::ids::pressOn, oju::ids::heatOn,
+                          oju::ids::spaceOn, oju::ids::ceilingOn })
+            setParam (p, id, 0.0f);
+        setParam (p, oju::ids::inputGain, 0.0f);
+        setParam (p, oju::ids::outputGain, 0.0f);
+        setParam (p, oju::ids::amount, 100.0f);
+        p.pumpMessageThreadWork();
+    }
+
+    float bandRmsDb (const juce::AudioBuffer<float>& b, double sr, oju::SvfType type, double f, int start, int len)
+    {
+        auto c = oju::makeSvf (type, sr, f, 0.707);
+        oju::SvfState st;
+        double sum = 0.0;
+        for (int i = 0; i < start + len && i < b.getNumSamples(); ++i)
+        {
+            const float y = st.process (c, b.getSample (0, i));
+            if (i >= start) sum += (double) y * y;
+        }
+        return (float) (10.0 * std::log10 (sum / juce::jmax (1, len) + 1.0e-20));
+    }
+}
+
+static void testPhase1Modules()
+{
+    std::puts ("\nOJU 2.0 phase 1: Cleanup, De-esser, Delay, Reverb, Output, Track mode");
+    const double sr = 48000.0;
+    bool finite = true;
+
+    // ---- Plosive tamer: a 45 Hz pop burst inside the vocal
+    {
+        auto in = v2::singer (sr, -18.0f, 3.0);
+        const int popAt = (int) (1.03 * sr);
+        for (int i = 0; i < (int) (0.08 * sr); ++i)
+        {
+            const float t = (float) i / (float) sr;
+            const float pop = 0.6f * std::exp (-t / 0.025f) * std::sin (juce::MathConstants<float>::twoPi * 45.0f * t);
+            for (int c = 0; c < 2; ++c)
+                in.setSample (c, popAt + i, in.getSample (c, popAt + i) + pop);
+        }
+        auto pOff = makeProcessor (sr, 256); v2::neutral (*pOff);
+        auto pOn = makeProcessor (sr, 256);  v2::neutral (*pOn);
+        setParam (*pOn, oju::ids::plosiveOn, 1.0f);
+        setParam (*pOn, oju::ids::plosiveAmount, 70.0f);
+        const auto a = v2::run (*pOff, in, 256, finite);
+        const auto b = v2::run (*pOn, in, 256, finite);
+        const float popOff = v2::bandRmsDb (a, sr, oju::SvfType::lowpass, 150.0, popAt, (int) (0.08 * sr));
+        const float popOn  = v2::bandRmsDb (b, sr, oju::SvfType::lowpass, 150.0, popAt, (int) (0.08 * sr));
+        const float midOff = v2::bandRmsDb (a, sr, oju::SvfType::bandpass, 1000.0, (int) (0.2 * sr), (int) (0.6 * sr));
+        const float midOn  = v2::bandRmsDb (b, sr, oju::SvfType::bandpass, 1000.0, (int) (0.2 * sr), (int) (0.6 * sr));
+        check (popOff - popOn > 4.0f, "plosive tamer: pop below 150 Hz down " + juce::String (popOff - popOn, 1) + " dB");
+        check (std::abs (midOff - midOn) < 0.5f, "plosive tamer leaves the voice alone (" + juce::String (midOn - midOff, 2) + " dB mids)");
+    }
+
+    // ---- Safety limiter: hot input, ceiling -1 dB, lookahead latency in Mix, none in Track
+    for (int track = 0; track < 2; ++track)
+    {
+        auto in = v2::singer (sr, -2.0f, 2.0);
+        in.applyGain (4.0f);
+        auto p = makeProcessor (sr, 256); v2::neutral (*p);
+        setParam (*p, oju::ids::limiterOn, 1.0f);
+        setParam (*p, oju::ids::latencyMode, (float) track);
+        p->pumpMessageThreadWork();
+        const auto out = v2::run (*p, in, 256, finite);
+        const float pk = v2::peakDb (out);
+        check (pk <= -0.99f, juce::String (track ? "Track" : "Mix") + " limiter holds the -1 dB ceiling (peak " + juce::String (pk, 2) + " dBFS)");
+        const int expected = track ? 0 : 4 + (int) std::ceil (0.0015 * sr);
+        check (p->getLatencySamples() == expected, juce::String (track ? "Track" : "Mix") + " mode latency " + juce::String (p->getLatencySamples())
+                                                   + " samples (expected " + juce::String (expected) + ")");
+    }
+
+    // ---- Track mode really is zero latency: an impulse comes straight through
+    {
+        auto p = makeProcessor (sr, 256); v2::neutral (*p);
+        setParam (*p, oju::ids::latencyMode, 1.0f);
+        setParam (*p, oju::ids::heatOn, 1.0f);
+        p->pumpMessageThreadWork();
+        juce::AudioBuffer<float> in (2, 2048);
+        in.clear();
+        in.setSample (0, 100, 0.5f); in.setSample (1, 100, 0.5f);
+        const auto out = v2::run (*p, in, 256, finite);
+        int maxIdx = 0;
+        for (int i = 0; i < out.getNumSamples(); ++i)
+            if (std::abs (out.getSample (0, i)) > std::abs (out.getSample (0, maxIdx))) maxIdx = i;
+        check (maxIdx == 100, "Track mode: zero latency, Heat at 1x (impulse at sample " + juce::String (maxIdx) + ")");
+    }
+
+    // ---- De-esser auto band follows the S's (the fake singer's S's sit around 7.2 kHz)
+    {
+        auto in = v2::singer (sr, -16.0f, 4.0);
+        auto p = makeProcessor (sr, 256); v2::neutral (*p);
+        setParam (*p, oju::ids::tameOn, 1.0f);
+        setParam (*p, oju::ids::tameAmount, 60.0f);
+        setParam (*p, oju::ids::tameFreq, 4000.0f);
+        setParam (*p, oju::ids::deessAuto, 1.0f);
+        p->pumpMessageThreadWork();
+        v2::run (*p, in, 256, finite);
+        const float band = p->getChain().tameBandHz.load();
+        check (band > 5000.0f && band < 7500.0f, "auto de-esser moved its split to " + juce::String (band, 0) + " Hz (S's at 7.2 kHz)");
+    }
+
+    // ---- Delay ducks while singing
+    {
+        auto in = v2::singer (sr, -16.0f, 3.0);
+        auto render = [&] (float duck)
+        {
+            auto p = makeProcessor (sr, 256); v2::neutral (*p);
+            setParam (*p, oju::ids::spaceOn, 1.0f);
+            setParam (*p, oju::ids::verbOn, 0.0f);
+            setParam (*p, oju::ids::delayMix, 100.0f);
+            setParam (*p, oju::ids::delayFeedback, 0.0f);
+            setParam (*p, oju::ids::echoDuck, duck);
+            p->pumpMessageThreadWork();
+            return v2::run (*p, in, 256, finite);
+        };
+        const auto dry = [&] { auto p = makeProcessor (sr, 256); v2::neutral (*p); return v2::run (*p, in, 256, finite); }();
+        const auto a = render (0.0f), b = render (100.0f);
+        // echo = output - dry; measure its energy while singing (first phrase)
+        auto echoDb = [&] (const juce::AudioBuffer<float>& o)
+        {
+            double sum = 0.0; const int s0 = (int) (0.5 * sr), s1 = (int) (2.3 * sr);
+            for (int i = s0; i < s1; ++i) { const double d = o.getSample (0, i) - dry.getSample (0, i); sum += d * d; }
+            return (float) (10.0 * std::log10 (sum / (s1 - s0) + 1.0e-20));
+        };
+        check (echoDb (a) - echoDb (b) > 8.0f, "delay ducks while singing (echo " + juce::String (echoDb (a) - echoDb (b), 1) + " dB lower)");
+    }
+
+    // ---- Reverb types each leave a tail
+    {
+        auto in = v2::singer (sr, -16.0f, 2.4);
+        juce::AudioBuffer<float> padded (2, in.getNumSamples() + (int) (1.5 * sr));
+        padded.clear();
+        for (int c = 0; c < 2; ++c) padded.copyFrom (c, 0, in, c, 0, in.getNumSamples());
+        float tails[4] {};
+        for (int t = 0; t < 4; ++t)
+        {
+            auto p = makeProcessor (sr, 256); v2::neutral (*p);
+            setParam (*p, oju::ids::spaceOn, 1.0f);
+            setParam (*p, oju::ids::echoOn, 0.0f);
+            setParam (*p, oju::ids::reverbMix, 40.0f);
+            setParam (*p, oju::ids::verbType, (float) t);
+            p->pumpMessageThreadWork();
+            const auto out = v2::run (*p, padded, 256, finite);
+            tails[t] = v2::rmsDb (out, in.getNumSamples() + (int) (0.3 * sr), (int) (0.3 * sr));
+        }
+        check (tails[0] > -80.0f && tails[1] > -80.0f && tails[2] > -80.0f && tails[3] > -80.0f,
+               "reverb classic/room/plate/hall tails: " + juce::String (tails[0], 0) + " / " + juce::String (tails[1], 0) + " / "
+               + juce::String (tails[2], 0) + " / " + juce::String (tails[3], 0) + " dB");
+        check (tails[3] > tails[1], "hall rings longer than room");
+    }
+
+    // ---- Vocal rider evens out a quiet verse and a loud hook
+    {
+        auto quiet = v2::singer (sr, -28.0f, 6.0), loud = v2::singer (sr, -12.0f, 6.0);
+        juce::AudioBuffer<float> in (2, quiet.getNumSamples() + loud.getNumSamples());
+        for (int c = 0; c < 2; ++c) { in.copyFrom (c, 0, quiet, c, 0, quiet.getNumSamples()); in.copyFrom (c, quiet.getNumSamples(), loud, c, 0, loud.getNumSamples()); }
+        auto measure = [&] (bool rider)
+        {
+            auto p = makeProcessor (sr, 256); v2::neutral (*p);
+            setParam (*p, oju::ids::riderOn, rider ? 1.0f : 0.0f);
+            setParam (*p, oju::ids::riderAmount, 100.0f);
+            p->pumpMessageThreadWork();
+            const auto out = v2::run (*p, in, 256, finite);
+            const int half = quiet.getNumSamples();
+            return v2::rmsDb (out, half + (int) (3 * sr), (int) (2.5 * sr)) - v2::rmsDb (out, (int) (3 * sr), (int) (2.5 * sr));
+        };
+        const float spreadOff = measure (false), spreadOn = measure (true);
+        check (spreadOn < spreadOff - 4.0f, "rider evens the level: verse-to-hook jump " + juce::String (spreadOff, 1)
+                                            + " dB -> " + juce::String (spreadOn, 1) + " dB");
+    }
+
+    // ---- "v1" compare reproduces the v1 sound exactly, whatever 2.0 modules are on
+    {
+        auto in = v2::singer (sr, -16.0f, 2.0);
+        auto ref = makeProcessor (sr, 256);
+        auto cmp = makeProcessor (sr, 256);
+        for (auto* id : { oju::ids::plosiveOn, oju::ids::limiterOn, oju::ids::riderOn, oju::ids::deessAuto })
+            setParam (*cmp, id, 1.0f);
+        setParam (*cmp, oju::ids::echoDuck, 80.0f);
+        setParam (*cmp, oju::ids::verbType, 3.0f);
+        cmp->setV1Compare (true);
+        cmp->pumpMessageThreadWork();
+        const auto a = v2::run (*ref, in, 256, finite);
+        const auto b = v2::run (*cmp, in, 256, finite);
+        bool same = true;
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < a.getNumSamples(); ++i)
+                same &= juce::exactlyEqual (a.getSample (c, i), b.getSample (c, i));
+        check (same, "v1 compare button: bit-identical to OJU v1");
+    }
+
+    check (finite, "all phase 1 renders finite");
+    check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
 }
 
 int main (int argc, char** argv)
@@ -487,6 +755,7 @@ int main (int argc, char** argv)
     testCpu();
     testStateRoundTrip();
     testMono();
+    testPhase1Modules();
     if (juce::SystemStats::getEnvironmentVariable ("OJU_SKIP_EDITOR", {}).isEmpty())
         testEditor (outDir);
 

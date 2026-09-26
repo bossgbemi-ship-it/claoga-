@@ -36,6 +36,23 @@ OjuProcessor::OjuProcessor()
     bind (pSpaceOn, ids::spaceOn);     bind (pDelayTime, ids::delayTime); bind (pFeedback, ids::delayFeedback);
     bind (pDelayMix, ids::delayMix);   bind (pVerbSize, ids::reverbSize); bind (pVerbMix, ids::reverbMix);
 
+    // OJU 2.0
+    bind (pRole, ids::role);               bind (pLatencyMode, ids::latencyMode); bind (pLinkGroup, ids::linkGroup);
+    bind (pDenoiseOn, ids::denoiseOn);     bind (pDenoiseAmt, ids::denoiseAmount); bind (pRoomAmt, ids::roomAmount);
+    bind (pPlosiveOn, ids::plosiveOn);     bind (pPlosiveAmt, ids::plosiveAmount);
+    bind (pTuneOn, ids::tuneOn);           bind (pTuneKeySource, ids::tuneKeySource); bind (pTuneKey, ids::tuneKey);
+    bind (pTuneScale, ids::tuneScale);     bind (pTuneSpeed, ids::tuneSpeed);     bind (pTuneHumanize, ids::tuneHumanize);
+    bind (pTuneMix, ids::tuneMix);         bind (pDeessAuto, ids::deessAuto);
+    bind (pLevelOn, ids::levelOn);         bind (pLevelAmt, ids::levelAmount);
+    bind (pBreathOn, ids::breathOn);       bind (pBreathAmt, ids::breathAmount);
+    bind (pDoubleOn, ids::doubleOn);       bind (pDoubleAmt, ids::doubleAmount);  bind (pWidth, ids::width);
+    bind (pHookOnly, ids::hookOnly);
+    bind (pEchoOn, ids::echoOn);           bind (pEchoDuck, ids::echoDuck);
+    bind (pVerbOn, ids::verbOn);           bind (pVerbType, ids::verbType);       bind (pVerbDuck, ids::verbDuck);
+    bind (pRiderOn, ids::riderOn);         bind (pRiderAmt, ids::riderAmount);
+    bind (pLimiterOn, ids::limiterOn);     bind (pLimiterCeiling, ids::limiterCeiling);
+    bind (pCarveOn, ids::carveOn);         bind (pCarveDepth, ids::carveDepth);
+
     setLatencySamples (VocalChain::expectedLatencySamples());
     startTimerHz (20);
 }
@@ -59,14 +76,14 @@ void OjuProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentRate.store (sampleRate);
     const int channels = juce::jmax (1, juce::jmin (2, getTotalNumOutputChannels()));
-    chain.prepare (sampleRate, samplesPerBlock, channels);
+    engine.prepare (sampleRate, samplesPerBlock, channels);
     listener.setSampleRate (sampleRate);
-    setLatencySamples (chain.getLatencySamples());
+    setLatencySamples (engine.latencyFor (readEngineSettings()));
 }
 
 void OjuProcessor::releaseResources()
 {
-    chain.reset();
+    engine.reset();
 }
 
 ChainSettings OjuProcessor::readSettings() const noexcept
@@ -112,7 +129,37 @@ ChainSettings OjuProcessor::readSettings() const noexcept
     s.reverbSize = pVerbSize.get() * 0.01f;
     s.reverbMix = pVerbMix.get() * 0.01f;
     s.bpm = hostBpm.load (std::memory_order_relaxed);
+
+    // OJU 2.0 insertions into the v1 chain (defaults = v1)
+    if (! v1Compare.load (std::memory_order_relaxed))
+    {
+        s.trackMode = pLatencyMode.get() > 0.5f;
+        s.deessAuto = pDeessAuto.get() > 0.5f;
+        s.levelOn = pLevelOn.get() > 0.5f;
+        s.levelAmount = pLevelAmt.get() * 0.01f;
+        s.echoOn = pEchoOn.get() > 0.5f;
+        s.verbOn = pVerbOn.get() > 0.5f;
+        s.echoDuck = pEchoDuck.get() * 0.01f;
+        s.verbDuck = pVerbDuck.get() * 0.01f;
+        s.verbType = juce::jlimit (0, 3, (int) std::lround (pVerbType.get()));
+        s.riderOn = pRiderOn.get() > 0.5f;
+        s.riderAmount = pRiderAmt.get() * 0.01f;
+    }
     return s;
+}
+
+EngineSettings OjuProcessor::readEngineSettings() const noexcept
+{
+    EngineSettings e;
+    e.chain = readSettings();
+    if (v1Compare.load (std::memory_order_relaxed))
+        return e;
+
+    e.plosiveOn = pPlosiveOn.get() > 0.5f;
+    e.plosiveAmount = pPlosiveAmt.get() * 0.01f;
+    e.limiterOn = pLimiterOn.get() > 0.5f;
+    e.limiterCeilingDb = pLimiterCeiling.get();
+    return e;
 }
 
 void OjuProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -137,7 +184,15 @@ void OjuProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     if (listener.isCapturing())
         listener.pushAudio (buffer.getArrayOfReadPointers(), chans, n);
 
-    chain.process (buffer, readSettings());
+    const auto t0 = juce::Time::getHighResolutionTicks();
+    engine.process (buffer, readEngineSettings());
+
+    // CPU meter: time spent in this callback relative to the audio it covers.
+    const double spent = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+    const double budget = n / juce::jmax (1.0, currentRate.load (std::memory_order_relaxed));
+    const float load = (float) (spent / budget);
+    const float prev = cpuLoad.load (std::memory_order_relaxed);
+    cpuLoad.store (prev + 0.05f * (load - prev), std::memory_order_relaxed);
 }
 
 juce::AudioProcessorParameter* OjuProcessor::getBypassParameter() const
@@ -196,6 +251,10 @@ void OjuProcessor::timerCallback()
 {
     applyPendingExtra();
 
+    // OJU 2.0: latency depends on which modules are on and on Track / Mix mode.
+    if (const int lat = engine.latencyFor (readEngineSettings()); lat != getLatencySamples())
+        setLatencySamples (lat);
+
     // Settle style/mode after a state load so it doesn't count as a user change.
     if (const int ls = loadedStyle.exchange (-1); ls >= 0) lastStyle = ls;
     if (const int lm = loadedMode.exchange (-1); lm >= 0)  lastMode = lm;
@@ -219,10 +278,59 @@ void OjuProcessor::timerCallback()
     {
         lastStyle = style;
         lastMode = mode;
-        // Re-target from the last read without listening again.
-        if (features.valid && listener.getState() != Listener::State::listening)
-            applyBrain (features, true);
+        // Re-target from the last read without listening again. With no read yet,
+        // the genre works as a preset: neutral measurements, genre targets.
+        if (listener.getState() != Listener::State::listening)
+        {
+            if (features.valid)
+                applyBrain (features, true);
+            else
+                applyBrain (neutralFeatures(), false);
+        }
     }
+}
+
+Features OjuProcessor::neutralFeatures()
+{
+    Features f;
+    f.valid = true;
+    f.rmsP10 = -30.0f; f.rmsP50 = -18.0f; f.rmsP90 = -13.0f; f.rmsP95 = -11.0f;
+    f.peakDb = -4.0f; f.crestDb = 14.0f; f.dynamicsDb = 14.0f;
+    f.mudExcessDb = 1.5f; f.boxExcessDb = 0.5f; f.presenceDb = 0.0f; f.harshExcessDb = 0.0f;
+    f.sibilanceDb = 2.0f; f.airDb = 0.0f; f.lowestVoiceHz = 140.0f;
+    return f;
+}
+
+//==============================================================================
+juce::File OjuProcessor::presetsDirectory()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+               .getChildFile ("Made by Joseph").getChildFile ("OJU").getChildFile ("Presets");
+}
+
+bool OjuProcessor::savePreset (const juce::File& file)
+{
+    juce::MemoryBlock mb;
+    getStateInformation (mb);
+    if (auto xml = getXmlFromBinary (mb.getData(), (int) mb.getSize()))
+    {
+        file.getParentDirectory().createDirectory();
+        return xml->writeTo (file.withFileExtension ("ojupreset"));
+    }
+    return false;
+}
+
+bool OjuProcessor::loadPreset (const juce::File& file)
+{
+    auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr)
+        return false;
+    juce::MemoryBlock mb;
+    copyXmlToBinary (*xml, mb);
+    // Presets are user actions: record them as host changes (undo / automation).
+    setStateInformation (mb.getData(), (int) mb.getSize());
+    applyPendingExtra();
+    return true;
 }
 
 //==============================================================================
@@ -387,7 +495,18 @@ void OjuProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (extra.isValid())
         tree.removeChild (extra, nullptr);
 
+    // Parameters missing from the preset (e.g. OJU 2.0 modules in a v1 preset) go back to
+    // their defaults - all new modules off - instead of keeping whatever was set before.
+    juce::StringArray present;
+    for (auto child : tree)
+        present.add (child.getProperty ("id").toString());
+
     apvts.replaceState (tree);
+    for (auto* param : getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+            if (! present.contains (ranged->paramID))
+                ranged->setValueNotifyingHost (ranged->getDefaultValue());
+
     loadedStyle.store ((int) std::lround (pStyle.get()));
     loadedMode.store ((int) std::lround (pMode.get()));
 

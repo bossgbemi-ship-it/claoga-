@@ -57,11 +57,6 @@ void Backplate::paint (juce::Graphics& g)
     g.fillRect (bar.withTop (bar.getBottom() - 3.0f));
     g.setColour (juce::Colours::black.withAlpha (0.7f));
     g.fillRect (bar.withTop (bar.getBottom()).withHeight (2.0f));
-    for (float x : { 10.0f, bar.getRight() - 10.0f })
-    {
-        drawRivet (g, { x, 14.0f }, 3.0f);
-        drawRivet (g, { x, bar.getBottom() - 16.0f }, 3.0f);
-    }
 
     // ---- logo: engraved brass nameplate
     {
@@ -78,41 +73,37 @@ void Backplate::paint (juce::Graphics& g)
         drawRivet (g, { plate.getX() + 9.0f, plate.getCentreY() }, 2.6f);
         drawRivet (g, { plate.getRight() - 9.0f, plate.getCentreY() }, 2.6f);
 
-        auto text = plate.reduced (22.0f, 4.0f);
-        drawEngravedText (g, juce::String::fromUTF8 ("Oj\xc3\xba"), text.removeFromLeft (84.0f), juce::Justification::centredLeft,
-                          font (38.0f, true), soot, true);
-        auto sub = text.withTrimmedLeft (4.0f);
-        drawEngravedText (g, "vocal chain", sub.removeFromTop (sub.getHeight() * 0.5f).translated (0.0f, 3.0f),
-                          juce::Justification::centredLeft, font (15.0f, true), soot.withAlpha (0.85f), true);
-        drawEngravedText (g, "Made by Joseph", sub.translated (0.0f, -2.0f), juce::Justification::centredLeft, font (13.0f), soot.withAlpha (0.7f), true);
+        auto text = plate.reduced (16.0f, 4.0f);
+        drawEngravedText (g, juce::String::fromUTF8 ("Oj\xc3\xba"), text.removeFromLeft (70.0f), juce::Justification::centredLeft,
+                          font (34.0f, true), soot, true);
+        auto sub = text.withTrimmedLeft (2.0f);
+        drawEngravedText (g, "2.0", sub.removeFromTop (sub.getHeight() * 0.5f).translated (0.0f, 3.0f),
+                          juce::Justification::centredLeft, font (17.0f, true), oxide.darker (0.3f), true);
+        drawEngravedText (g, "Made by Joseph", sub.translated (0.0f, -2.0f), juce::Justification::centredLeft, font (11.5f), soot.withAlpha (0.75f), true);
     }
 
     // ---- main panels
     panel (g, layout::eyePanel, 10);
-    panel (g, layout::eqPanel, 20);
-    panel (g, layout::readPanel, 30);
-    panel (g, layout::meterPanel, 40);
+    panel (g, layout::detailPanel, 20);
+    panel (g, layout::statusPanel, 40);
 
-    // ---- module cards
-    const char* titles[] = { "Shape", "Tame", "Press", "Heat", "Space", "Master" };
-    for (int i = 0; i < layout::numCards; ++i)
+    // ---- rack bed: a recessed iron channel the tiles sit in, with chain arrows
     {
-        const auto r = layout::card (i).toFloat();
-        drawIronPlate (g, r, 9.0f, 100 + i);
-
-        auto header = r.withHeight ((float) layout::cardHeader).reduced (10.0f, 0.0f);
+        auto bed = layout::rack.toFloat().expanded (6.0f);
         g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.drawHorizontalLine ((int) header.getBottom(), r.getX() + 8.0f, r.getRight() - 8.0f);
-        g.setColour (juce::Colours::white.withAlpha (0.05f));
-        g.drawHorizontalLine ((int) header.getBottom() + 1, r.getX() + 8.0f, r.getRight() - 8.0f);
-
-        // small brass tab behind the title
-        g.setColour (brass.withAlpha (0.85f));
-        g.fillRoundedRectangle (header.getX() + 2.0f, header.getCentreY() - 7.0f, 3.0f, 14.0f, 1.5f);
-        drawEngravedText (g, titles[i], header.withTrimmedLeft (12.0f), juce::Justification::centredLeft, font (19.0f, true), bone);
-
-        for (auto p : { r.getBottomLeft(), r.getBottomRight() })
-            drawRivet (g, p + juce::Point<float> (p.x < r.getCentreX() ? 8.0f : -8.0f, -8.0f), 2.2f);
+        g.fillRoundedRectangle (bed, 12.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.04f));
+        g.drawRoundedRectangle (bed.translated (0.0f, 1.0f), 12.0f, 1.0f);
+        for (int i = 0; i < 11; ++i)
+        {
+            if (i == 5) continue;
+            const auto a = layout::tile (i).toFloat(), b = layout::tile (i + 1).toFloat();
+            const float x = (a.getRight() + b.getX()) * 0.5f, y = a.getCentreY();
+            juce::Path arrow;
+            arrow.addTriangle (x - 3.0f, y - 5.0f, x - 3.0f, y + 5.0f, x + 4.0f, y);
+            g.setColour (brass.withAlpha (0.55f));
+            g.fillPath (arrow);
+        }
     }
 }
 

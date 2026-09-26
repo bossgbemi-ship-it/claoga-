@@ -3,6 +3,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <atomic>
 #include <array>
+#include <vector>
 #include "Svf.h"
 
 namespace oju
@@ -32,6 +33,23 @@ struct ChainSettings
     int   delayDivision = 3;
     float feedback = 0.25f, delayMix = 0.1f, reverbSize = 0.45f, reverbMix = 0.12f;
     double bpm = 120.0;
+
+    //--------------------------------------------------------------------------
+    // OJU 2.0 additions. The defaults reproduce OJU v1 bit for bit.
+    bool  trackMode = false;                 // zero latency: Heat runs at 1x
+    bool  deessAuto = false;                 // Tame follows the sibilance band (4-10 kHz)
+    bool  levelOn = false;   float levelAmount = 0.5f;   // Compress stage 1 (leveler)
+    bool  echoOn = true,     verbOn = true;
+    float echoDuck = 0.0f,   verbDuck = 0.0f;           // duck while singing, bloom in gaps
+    int   verbType = 0;                                  // 0 classic (v1), 1 room, 2 plate, 3 hall
+    bool  riderOn = false;   float riderAmount = 0.5f;  // Output: vocal rider
+};
+
+// Hook for OJU 2.0 modules that sit between Saturate (Heat) and Delay/Reverb (Space).
+struct PostHeatInsert
+{
+    virtual ~PostHeatInsert() = default;
+    virtual void process (float* const* channels, int numChannels, int numSamples) noexcept = 0;
 };
 
 // Fixed voicing of the Shape EQ.
@@ -58,18 +76,26 @@ public:
     void reset();
 
     int getLatencySamples() const noexcept { return latency; }
+    int getLatencySamples (bool isTrackMode) const noexcept { return isTrackMode ? 0 : latency; }
 
     // The latency is fixed by the Heat oversampler design, so it can be reported before prepare().
     static int expectedLatencySamples();
 
     // In-place. Must be called with <= maxChannels channels. Real-time safe.
-    void process (juce::AudioBuffer<float>& buffer, const ChainSettings& s) noexcept;
+    // rawSource (optional): the untouched input, aligned with 'buffer', used for the
+    // latency-compensated dry (Amount) and bypass paths when modules run before the chain.
+    void process (juce::AudioBuffer<float>& buffer, const ChainSettings& s,
+                  const float* const* rawSource = nullptr, PostHeatInsert* insert = nullptr) noexcept;
+
+    // OJU 2.0 meters / state readouts
+    std::atomic<float> levelGrDb { 0.0f }, tameBandHz { 0.0f }, riderGainDb { 0.0f };
 
     // Meters (written by the audio thread, consumed/cleared by the UI).
     std::atomic<float> inputPeak { 0.0f }, outputPeak { 0.0f }, pressGrDb { 0.0f }, tameGrDb { 0.0f };
 
 private:
-    void processChunk (juce::AudioBuffer<float>& buffer, int start, int n, const ChainSettings& s) noexcept;
+    void processChunk (juce::AudioBuffer<float>& buffer, int start, int n, const ChainSettings& s,
+                       const float* const* rawSource, PostHeatInsert* insert) noexcept;
     void setTargets (const ChainSettings& s) noexcept;
     void updateShapeCoeffs() noexcept;
     void updateDynamicsCoeffs() noexcept;
@@ -131,6 +157,40 @@ private:
 
     int lastDivision = -1;
     double lastBpm = 0.0;
+
+    //--------------------------------------------------------------------------
+    // OJU 2.0 state (only touched when the matching feature is on)
+    bool trackMode = false;
+    int activeLatency = 0;
+    int lastVerbType = 0;
+    float heatLpCoef1x = 0.0f;
+
+    // De-esser auto band: four band-pass detectors across 4-10 kHz
+    static constexpr int sibBands = 4;
+    bool deessAuto = false;
+    std::array<SvfCoeffs, sibBands> cSib;
+    std::array<SvfState, sibBands> sSib;
+    std::array<float, sibBands> sibEnv {};
+    float sibTrackedHz = 6500.0f, sibEnvCoef = 0.0f;
+
+    // Compress stage 1: leveler (slow, auto-threshold)
+    Lin levelMix, levelAmt;
+    float levelEnvDb = -60.0f, levelTrackDb = -24.0f, levelGain = 0.0f;
+    float levelEnvCoef = 0.0f, levelTrackCoef = 0.0f, levelAttCoef = 0.0f, levelRelCoef = 0.0f;
+
+    // Space: separate delay / reverb switches, ducking, reverb types
+    Lin echoOnMix, verbOnMix;
+    float echoDuckAmt = 0.0f, verbDuckAmt = 0.0f;
+    float voiceEnv = 0.0f, voiceEnvAtt = 0.0f, voiceEnvRel = 0.0f;
+    float echoDuckDb = 0.0f, verbDuckDb = 0.0f, duckAttCoef = 0.0f, echoRelCoef = 0.0f, verbRelCoef = 0.0f;
+    juce::AudioBuffer<float> preDelay;
+    std::vector<float> verbDuckBuf;
+    int preDelayWrite = 0, preDelaySamples = 0;
+
+    // Output: vocal rider
+    Lin riderMix;
+    float riderAmt = 0.5f, riderEnvDb = -80.0f, riderTargetDb = -20.0f, riderDb = 0.0f;
+    float riderEnvCoef = 0.0f, riderTargetCoef = 0.0f, riderMoveCoef = 0.0f;
 };
 
 } // namespace oju

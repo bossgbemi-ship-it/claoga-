@@ -8,7 +8,7 @@ namespace oju
 /*  Topology-preserving state-variable filter (Simper / Cytomic form).
     Coefficients can be changed every few samples without clicks or blow-ups,
     which makes it ideal for an EQ that the brain moves while audio plays. */
-enum class SvfType { highpass, bell, lowShelf, highShelf };
+enum class SvfType { highpass, bell, lowShelf, highShelf, bandpass, lowpass };
 
 struct SvfCoeffs
 {
@@ -33,6 +33,8 @@ inline SvfCoeffs makeSvf (SvfType type, double sampleRate, double freq, double q
         case SvfType::bell:      k = 1.0 / (q * A); m1 = k * (A * A - 1.0); break;
         case SvfType::lowShelf:  g /= std::sqrt (A); m1 = k * (A - 1.0); m2 = A * A - 1.0; break;
         case SvfType::highShelf: g *= std::sqrt (A); m0 = A * A; m1 = k * (1.0 - A) * A; m2 = 1.0 - A * A; break;
+        case SvfType::bandpass:  m0 = 0.0; m1 = k; m2 = 0.0; break;   // unity gain at the centre
+        case SvfType::lowpass:   m0 = 0.0; m1 = 0.0; m2 = 1.0; break;
     }
 
     SvfCoeffs c;

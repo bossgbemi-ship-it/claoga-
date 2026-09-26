@@ -65,6 +65,7 @@ set(OJU_SOURCES
     Source/PluginProcessor.cpp
     Source/Parameters.cpp
     Source/dsp/VocalChain.cpp
+    Source/dsp/Engine.cpp
     Source/brain/Listener.cpp
     Source/brain/Brain.cpp
     Source/ui/Theme.cpp
@@ -73,6 +74,8 @@ set(OJU_SOURCES
     Source/ui/EyeButton.cpp
     Source/ui/EqCurveView.cpp
     Source/ui/Backplate.cpp
+    Source/ui/Rack.cpp
+    Source/ui/ModuleViews.cpp
     Source/ui/PluginEditor.cpp)
 
 target_sources(OJU PRIVATE ${OJU_SOURCES})

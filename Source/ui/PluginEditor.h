@@ -6,6 +6,8 @@
 #include "EyeButton.h"
 #include "EqCurveView.h"
 #include "Backplate.h"
+#include "Rack.h"
+#include "ModuleViews.h"
 
 namespace oju
 {
@@ -19,13 +21,29 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    void showModule (int id) { selectModule (id); }   // also used by the test runner
+
 private:
     void timerCallback() override;
     void eyeClicked();
     bool standaloneInputMuted() const;
     void unmuteStandaloneInput();
-    Knob& addKnob (const char* id, const juce::String& name, int card, int col, int row, bool bipolar = false, bool stepped = false);
-    LampSwitch& addSwitch (const char* id, juce::Rectangle<int> bounds, const juce::String& label = {});
+
+    // Rack
+    bool moduleOn (int id) const;
+    void toggleModule (int id);
+    void selectModule (int id);
+    juce::String tileStatus (int id) const;
+    float tileGr (int id) const;
+
+    // Building the module views
+    void buildViews();
+    Knob& addKnob (juce::Component& parent, const char* id, const juce::String& name, int col, int row,
+                   bool bipolar = false, bool stepped = false);
+    LampSwitch& addSwitch (juce::Component& parent, const char* id, const juce::String& label, juce::Rectangle<int> bounds);
+    static juce::Rectangle<int> cell (int col, int row, int colSpan = 1, int x0 = 0);
+
+    void showPresetsMenu();
 
     // Painted text under the eye.
     struct EyeStatus : public juce::Component
@@ -35,11 +53,31 @@ private:
         void paint (juce::Graphics&) override;
     };
 
+    // A small engraved readout plate: a title line and a value line.
     struct Readout : public juce::Component
     {
         juce::String name, value;
+        juce::Colour valueColour = theme::brassLight;
         void set (const juce::String& v) { if (v != value) { value = v; repaint(); } }
         void paint (juce::Graphics&) override;
+    };
+
+    // CPU, latency and Beat Link status in the right-hand column.
+    struct StatusInfo : public juce::Component
+    {
+        juce::String cpu, latency, link;
+        bool linked = false;
+        void set (const juce::String& c, const juce::String& l, const juce::String& k, bool isLinked)
+        {
+            if (c == cpu && l == latency && k == link && isLinked == linked) return;
+            cpu = c; latency = l; link = k; linked = isLinked; repaint();
+        }
+        void paint (juce::Graphics&) override;
+    };
+
+    struct MeterFrame
+    {
+        float in = 0, out = 0, press = 0, tame = 0, level = 0, limiter = 0, plosive = 0;
     };
 
     OjuProcessor& ojuProcessor;
@@ -48,24 +86,39 @@ private:
     juce::Component content;
     Backplate backplate;
 
-    SegmentedChoice styleChoice, modeChoice;
-    PlateButton abButton { "A/B" }, bypassButton { "Bypass" };
+    SegmentedChoice roleChoice, genreChoice, modeChoice, latencyChoice;
+    PlateButton presetsButton { "Presets" }, abButton { "A/B" }, v1Button { "v1" }, bypassButton { "Bypass" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
 
     EyeButton eye;
     EyeStatus eyeStatus;
-    EqCurveView eqCurve;
+    DetailPanel detail;
     ReadPanel readPanel;
-    Meter inMeter { Meter::Kind::level, "In" }, grMeter { Meter::Kind::reduction, "Press" }, outMeter { Meter::Kind::level, "Out" };
-    Readout tempo, tameLamp;
+    EqCurveView eqCurve;
+    Meter inMeter { Meter::Kind::level, "In" }, grMeter { Meter::Kind::reduction, "Comp" }, outMeter { Meter::Kind::level, "Out" };
+    StatusInfo statusInfo;
 
+    std::array<std::unique_ptr<ModuleTile>, numModules> tiles;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<LampSwitch>> switches;
-    Knob* parallelKnob = nullptr;
+    std::vector<std::unique_ptr<juce::Component>> extras;
 
+    Knob* parallelKnob = nullptr;
+    Readout* denoiseInfo = nullptr;
+    Readout* cleanupInfo = nullptr;
+    Readout* tuneInfo = nullptr;
+    Readout* deessInfo = nullptr;
+    Readout* tempoInfo = nullptr;
+    Readout* outputInfo = nullptr;
+    Readout* beatInfo = nullptr;
+    PlateButton* learnRoomButton = nullptr;
+    PlateButton* loadBeatButton = nullptr;
+
+    MeterFrame meters;
+    std::unique_ptr<juce::FileChooser> chooser;
     juce::TooltipWindow tooltips { this, 700 };
 
-    int stalledFrames = 0, unmuteArmedFrames = 0;
+    int stalledFrames = 0, unmuteArmedFrames = 0, lastReadVersion = -1;
     float lastProgress = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OjuEditor)

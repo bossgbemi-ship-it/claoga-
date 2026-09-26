@@ -135,6 +135,35 @@ void VocalChain::prepare (double sampleRate, int maxBlockSize, int numChannels)
     fbLpCoef    = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * 4200.0 / fs);
     verbHpCoef  = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * 220.0 / fs);
 
+    //--------------------------------------------------------------------------
+    // OJU 2.0
+    heatLpCoef1x = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * juce::jmin (14000.0, fs * 0.45) / fs);
+    {
+        const double centres[sibBands] = { 4500.0, 6000.0, 7500.0, 9500.0 };
+        for (int b = 0; b < sibBands; ++b)
+            cSib[(size_t) b] = makeSvf (SvfType::bandpass, fs, juce::jmin (centres[b], fs * 0.45), 2.5);
+        sibEnvCoef = onePoleCoef (0.004, fs);
+    }
+    for (auto* v : { &levelMix, &levelAmt, &echoOnMix, &verbOnMix, &riderMix })
+        v->reset (fs, ramp);
+    echoOnMix.setCurrentAndTargetValue (1.0f);   // v1 behaviour: delay and reverb on
+    verbOnMix.setCurrentAndTargetValue (1.0f);
+    levelEnvCoef   = onePoleCoef (0.030, fs);
+    levelTrackCoef = onePoleCoef (3.0, fs);
+    levelAttCoef   = onePoleCoef (0.020, fs);
+    levelRelCoef   = onePoleCoef (0.400, fs);
+    voiceEnvAtt    = onePoleCoef (0.005, fs);
+    voiceEnvRel    = onePoleCoef (0.200, fs);
+    duckAttCoef    = onePoleCoef (0.030, fs);
+    echoRelCoef    = onePoleCoef (0.350, fs);
+    verbRelCoef    = onePoleCoef (0.700, fs);
+    riderEnvCoef   = onePoleCoef (0.020, fs);
+    riderTargetCoef = onePoleCoef (4.0, fs);
+    riderMoveCoef  = onePoleCoef (0.300, fs);
+    preDelay.setSize (maxChannels, (int) std::ceil (fs * 0.06) + 4);
+    verbDuckBuf.assign ((size_t) maxBlock, 0.0f);
+    activeLatency = latency;
+
     prepared = true;
     reset();
 }
@@ -165,6 +194,16 @@ void VocalChain::reset()
     lastDivision = -1;
     tameLastFreq = 0.0f;
     reverbSizeTarget = -1.0f;
+
+    // OJU 2.0
+    for (auto& st : sSib) st.reset();
+    sibEnv.fill (0.0f);
+    sibTrackedHz = 6500.0f;
+    levelEnvDb = -60.0f; levelTrackDb = -24.0f; levelGain = 0.0f;
+    voiceEnv = 0.0f; echoDuckDb = verbDuckDb = 0.0f;
+    preDelay.clear(); preDelayWrite = 0;
+    riderEnvDb = -80.0f; riderTargetDb = -20.0f; riderDb = 0.0f;
+    lastVerbType = 0;
 }
 
 void VocalChain::setTargets (const ChainSettings& s) noexcept
@@ -223,18 +262,45 @@ void VocalChain::setTargets (const ChainSettings& s) noexcept
         lastBpm = s.bpm;
     }
 
-    if (std::abs (s.reverbSize - reverbSizeTarget) > 1.0e-4f)
+    if (std::abs (s.reverbSize - reverbSizeTarget) > 1.0e-4f || s.verbType != lastVerbType)
     {
         reverbSizeTarget = s.reverbSize;
+        lastVerbType = s.verbType;
+        const float size = juce::jlimit (0.0f, 1.0f, s.reverbSize);
         juce::Reverb::Parameters p;
-        p.roomSize = 0.35f + 0.6f * juce::jlimit (0.0f, 1.0f, s.reverbSize);
-        p.damping = 0.55f - 0.25f * juce::jlimit (0.0f, 1.0f, s.reverbSize);
+        p.roomSize = 0.35f + 0.6f * size;
+        p.damping = 0.55f - 0.25f * size;
         p.wetLevel = 1.0f;
         p.dryLevel = 0.0f;
         p.width = 1.0f;
         p.freezeMode = 0.0f;
+        double preDelayMs = 0.0;
+        switch (s.verbType)     // OJU 2.0 reverb types (0 = the v1 "classic" voicing above)
+        {
+            case 1: p.roomSize = 0.40f + 0.30f * size; p.damping = 0.62f; p.width = 0.8f; preDelayMs = 8.0;  break;  // room
+            case 2: p.roomSize = 0.70f + 0.22f * size; p.damping = 0.22f; p.width = 1.0f; preDelayMs = 20.0; break;  // plate
+            case 3: p.roomSize = 0.84f + 0.14f * size; p.damping = 0.45f; p.width = 1.0f; preDelayMs = 35.0; break;  // hall
+            default: break;
+        }
+        preDelaySamples = juce::jlimit (0, preDelay.getNumSamples() - 2, (int) std::round (preDelayMs * 0.001 * fs));
         reverb.setParameters (p);
     }
+
+    //--------------------------------------------------------------------------
+    // OJU 2.0
+    trackMode = s.trackMode;
+    activeLatency = trackMode ? 0 : latency;
+    deessAuto = s.deessAuto && s.tameOn;
+    if (deessAuto)
+        tameFreq.setTargetValue (juce::jlimit (3500.0f, 10000.0f, sibTrackedHz * 0.82f));
+    levelMix.setTargetValue (s.levelOn ? 1.0f : 0.0f);
+    levelAmt.setTargetValue (juce::jlimit (0.0f, 1.0f, s.levelAmount));
+    echoOnMix.setTargetValue (s.echoOn ? 1.0f : 0.0f);
+    verbOnMix.setTargetValue (s.verbOn ? 1.0f : 0.0f);
+    echoDuckAmt = juce::jlimit (0.0f, 1.0f, s.echoDuck);
+    verbDuckAmt = juce::jlimit (0.0f, 1.0f, s.verbDuck);
+    riderMix.setTargetValue (s.riderOn ? 1.0f : 0.0f);
+    riderAmt = juce::jlimit (0.0f, 1.0f, s.riderAmount);
 }
 
 void VocalChain::updateDynamicsCoeffs() noexcept
@@ -265,7 +331,8 @@ void VocalChain::updateShapeCoeffs() noexcept
 }
 
 //==============================================================================
-void VocalChain::process (juce::AudioBuffer<float>& buffer, const ChainSettings& s) noexcept
+void VocalChain::process (juce::AudioBuffer<float>& buffer, const ChainSettings& s,
+                          const float* const* rawSource, PostHeatInsert* insert) noexcept
 {
     if (! prepared)
         return;
@@ -274,10 +341,11 @@ void VocalChain::process (juce::AudioBuffer<float>& buffer, const ChainSettings&
 
     const int total = buffer.getNumSamples();
     for (int start = 0; start < total; start += maxBlock)
-        processChunk (buffer, start, juce::jmin (maxBlock, total - start), s);
+        processChunk (buffer, start, juce::jmin (maxBlock, total - start), s, rawSource, insert);
 }
 
-void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int n, const ChainSettings&) noexcept
+void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int n, const ChainSettings&,
+                               const float* const* rawSource, PostHeatInsert* insert) noexcept
 {
     const int nch = juce::jmin (buffer.getNumChannels(), channels);
     if (nch <= 0 || n <= 0)
@@ -285,7 +353,7 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
 
     float* ch[maxChannels] = { buffer.getWritePointer (0, start), nch > 1 ? buffer.getWritePointer (1, start) : nullptr };
 
-    float inPk = 0.0f, grMax = 0.0f, tameMax = 0.0f;
+    float inPk = 0.0f, grMax = 0.0f, tameMax = 0.0f, levelMax = 0.0f;
 
     // ------------------------------------------------------------ Stage A
     for (int i = 0; i < n; ++i)
@@ -311,12 +379,13 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
         for (int c = 0; c < nch; ++c)
         {
             const auto uc = (size_t) c;
-            const float raw = ch[c][i];
+            const float src = ch[c][i];
+            const float raw = rawSource != nullptr ? rawSource[c][start + i] : src;   // OJU 2.0: pre-chain modules
             inPk = juce::jmax (inPk, std::abs (raw));
             rawRing.setSample (c, ringPos, raw);
 
-            float v = raw * gIn;
-            dryRing.setSample (c, ringPos, v);
+            float v = src * gIn;
+            dryRing.setSample (c, ringPos, raw * gIn);
 
             if (mLc > 0.0f)
             {
@@ -346,6 +415,22 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
                 fullLevel = juce::jmax (fullLevel, std::abs (x[c]));
             }
 
+            int sibLoudest = -1;
+            if (deessAuto)   // OJU 2.0: measure where the S's actually live
+            {
+                float mono = 0.0f;
+                for (int c = 0; c < nch; ++c)
+                    mono += x[c];
+                sibLoudest = 0;
+                for (int b = 0; b < sibBands; ++b)
+                {
+                    const float e = std::abs (sSib[(size_t) b].process (cSib[(size_t) b], mono));
+                    auto& env = sibEnv[(size_t) b];
+                    env = e + sibEnvCoef * (env - e);
+                    if (env > sibEnv[(size_t) sibLoudest]) sibLoudest = b;
+                }
+            }
+
             tameEnvHi   = hiLevel   + (hiLevel   > tameEnvHi   ? tameEnvAtt : tameEnvRel) * (tameEnvHi - hiLevel);
             tameEnvFull = fullLevel + (fullLevel > tameEnvFull ? tameEnvAtt : tameEnvRel) * (tameEnvFull - fullLevel);
 
@@ -356,6 +441,16 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
                 const float thresh = -4.0f - 12.0f * amt;
                 target = juce::jlimit (0.0f, 3.0f + 15.0f * amt, (ratioDb - thresh) * 1.2f) * juce::jmin (1.0f, amt * 5.0f);
             }
+            // OJU 2.0 auto band: only learn during real S moments (high band dominating the voice)
+            // (the S test uses the fixed 4-10 kHz bands, not the moving split, so it can't drift)
+            const float sibSum = sibEnv[0] + sibEnv[1] + sibEnv[2] + sibEnv[3];
+            if (sibLoudest >= 0 && sibSum > 0.02f && sibSum > 0.35f * tameEnvFull)
+            {
+                constexpr float centres[sibBands] = { 4500.0f, 6000.0f, 7500.0f, 9500.0f };
+                const float weight = juce::jmin (1.0f, sibSum * 10.0f);   // louder S's teach faster
+                sibTrackedHz += 0.002f * weight * (centres[sibLoudest] - sibTrackedHz);
+            }
+
             tameRedDb = target + (target > tameRedDb ? tameGainAtt : tameGainRel) * (tameRedDb - target);
             tameMax = juce::jmax (tameMax, tameRedDb * mTame);
 
@@ -365,6 +460,30 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
                 const float y = lo[c] + hi[c] * gHi;
                 x[c] += mTame * (y - x[c]);
             }
+        }
+
+        // ---- OJU 2.0 Compress stage 1: a slow leveler with an auto threshold
+        const float mLevel = levelMix.getNextValue();
+        const float lAmt = levelAmt.getNextValue();
+        if (mLevel > 0.0f)
+        {
+            float pw = 0.0f;
+            for (int c = 0; c < nch; ++c)
+                pw = juce::jmax (pw, x[c] * x[c]);
+            const float instDb = 4.3429448f * std::log (pw + 1.0e-12f);
+            levelEnvDb = instDb + levelEnvCoef * (levelEnvDb - instDb);
+            if (levelEnvDb > -50.0f)
+                levelTrackDb = levelEnvDb + levelTrackCoef * (levelTrackDb - levelEnvDb);
+
+            const float thresh = levelTrackDb + 2.0f - 6.0f * lAmt;
+            const float lRatio = 1.5f + 2.5f * lAmt;
+            const float target = levelEnvDb > thresh ? (levelEnvDb - thresh) * (1.0f - 1.0f / lRatio) : 0.0f;
+            levelGain = target + (target > levelGain ? levelAttCoef : levelRelCoef) * (levelGain - target);
+            levelMax = juce::jmax (levelMax, levelGain * mLevel);
+            const float makeupLev = juce::jlimit (0.0f, 6.0f, 0.5f * (levelTrackDb - thresh) * (1.0f - 1.0f / lRatio));
+            const float g = dbToGain (makeupLev - levelGain);
+            for (int c = 0; c < nch; ++c)
+                x[c] += mLevel * (x[c] * g - x[c]);
         }
 
         // ---- Press (soft-knee feed-forward, linked) + Extreme parallel stage
@@ -407,6 +526,30 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
     }
 
     // ------------------------------------------------------------ Stage B: Heat (2x oversampled)
+    if (trackMode)
+    {
+        // OJU 2.0 Track mode: the same Heat curve at 1x, so the plugin adds no latency.
+        for (int i = 0; i < n; ++i)
+        {
+            const float on = heatMix.getNextValue();
+            const float drive = dbToGain (heatDrive.getNextValue());
+            const float wet = heatWet.getNextValue() * on;
+            if (wet <= 0.0f)
+                continue;
+
+            const float bias = std::tanh (heatAsym);
+            const float norm = 0.25f / (std::tanh (drive * 0.25f + heatAsym) - bias);
+            for (int c = 0; c < nch; ++c)
+            {
+                const float dry = ch[c][i];
+                float y = (std::tanh (drive * dry + heatAsym) - bias) * norm;
+                auto& lp = heatLp[(size_t) c];
+                lp = y + heatLpCoef1x * (lp - y);
+                ch[c][i] = dry + wet * (lp - dry);
+            }
+        }
+    }
+    else
     {
         juce::dsp::AudioBlock<float> block (ch, (size_t) nch, (size_t) n);
         auto up = oversampler->processSamplesUp (block);
@@ -435,7 +578,9 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
         }
 
         oversampler->processSamplesDown (block);
+    }
 
+    {
         for (int c = 0; c < nch; ++c)
         {
             auto& x1 = dcX1[(size_t) c];
@@ -451,16 +596,41 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
         }
     }
 
+    // ------------------------------------------------------------ OJU 2.0: Breath control, Double + Width
+    if (insert != nullptr)
+        insert->process (ch, nch, n);
+
     // ------------------------------------------------------------ Stage C: Space, Amount, Output
-    const bool verbWanted = verbLevel.getTargetValue() > 0.0f && spaceMix.getTargetValue() > 0.0f;
-    const bool runVerb = verbWanted || verbLevel.isSmoothing() || spaceMix.isSmoothing() || (reverbActive && verbLevel.getCurrentValue() > 0.0f);
+    const bool verbWanted = verbLevel.getTargetValue() > 0.0f && spaceMix.getTargetValue() > 0.0f && verbOnMix.getTargetValue() > 0.0f;
+    const bool runVerb = verbWanted || verbLevel.isSmoothing() || spaceMix.isSmoothing() || verbOnMix.isSmoothing()
+                         || (reverbActive && verbLevel.getCurrentValue() > 0.0f);
+    const bool anyDuck = echoDuckAmt > 0.0f || verbDuckAmt > 0.0f || echoDuckDb > 0.001f || verbDuckDb > 0.001f;
 
     for (int i = 0; i < n; ++i)
     {
         const float mSpace = spaceMix.getNextValue();
-        const float echo = echoLevel.getNextValue() * mSpace;
+        const float echoBase = echoLevel.getNextValue() * mSpace;
         const float fb = feedback.getNextValue();
         const float dly = delaySamples.getNextValue();
+
+        // OJU 2.0: delay on/off, and ducking while the vocal sings (1.0 exactly when unused)
+        const float mEcho = echoOnMix.getNextValue();
+        float duckE = 1.0f;
+        if (anyDuck)
+        {
+            float lvl = 0.0f;
+            for (int c = 0; c < nch; ++c)
+                lvl = juce::jmax (lvl, std::abs (ch[c][i]));
+            voiceEnv = lvl + (lvl > voiceEnv ? voiceEnvAtt : voiceEnvRel) * (voiceEnv - lvl);
+            const bool singing = voiceEnv > 0.0056f;   // about -45 dBFS
+            const float eT = singing ? 18.0f * echoDuckAmt : 0.0f;
+            const float vT = singing ? 15.0f * verbDuckAmt : 0.0f;
+            echoDuckDb = eT + (eT > echoDuckDb ? duckAttCoef : echoRelCoef) * (echoDuckDb - eT);
+            verbDuckDb = vT + (vT > verbDuckDb ? duckAttCoef : verbRelCoef) * (verbDuckDb - vT);
+            duckE = dbToGain (-echoDuckDb);
+            verbDuckBuf[(size_t) i] = verbDuckDb;
+        }
+        const float echo = echoBase * (mEcho * duckE);
 
         float readPos = (float) delayWrite - dly;
         if (readPos < 0.0f)
@@ -490,12 +660,24 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
                 const float vhp = verbHpCoef * (verbHp[uc] + x - verbHpX1[uc]);
                 verbHpX1[uc] = x;
                 verbHp[uc] = vhp;
-                reverbBuffer.setSample (c, i, vhp * 0.5f);
+                if (preDelaySamples > 0)   // OJU 2.0 reverb types use a short pre-delay
+                {
+                    preDelay.setSample (c, preDelayWrite, vhp * 0.5f);
+                    int r = preDelayWrite - preDelaySamples;
+                    if (r < 0) r += preDelay.getNumSamples();
+                    reverbBuffer.setSample (c, i, preDelay.getSample (c, r));
+                }
+                else
+                {
+                    reverbBuffer.setSample (c, i, vhp * 0.5f);
+                }
             }
 
             ch[c][i] = x + echo * rep;
         }
         delayWrite = (delayWrite + 1) % delayLength;
+        if (preDelaySamples > 0)
+            preDelayWrite = (preDelayWrite + 1) % preDelay.getNumSamples();
     }
 
     if (runVerb)
@@ -515,19 +697,50 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
     float outPk = 0.0f;
     for (int i = 0; i < n; ++i)
     {
-        const float verbGain = runVerb ? verbLevel.getNextValue() * spaceMix.getCurrentValue() : (verbLevel.skip (1), 0.0f);
+        const float mVerbOn = verbOnMix.getNextValue();
+        const float duckV = anyDuck ? dbToGain (-verbDuckBuf[(size_t) i]) : 1.0f;
+        const float verbGain = runVerb ? verbLevel.getNextValue() * spaceMix.getCurrentValue() * (mVerbOn * duckV)
+                                       : (verbLevel.skip (1), 0.0f);
         const float amtMix = amountMix.getNextValue();
         const float gOut = outGain.getNextValue();
         const float mCeil = ceilingMix.getNextValue();
         const float mBypass = bypassMix.getNextValue();
 
-        const int readRing = ((ringWrite + i - latency) % ringSize + ringSize) % ringSize;
+        const int readRing = ((ringWrite + i - activeLatency) % ringSize + ringSize) % ringSize;
 
+        float wetv[maxChannels] {};
         for (int c = 0; c < nch; ++c)
         {
             float wet = ch[c][i];
             if (runVerb)
                 wet += verbGain * reverbBuffer.getSample (c, i);
+            wetv[c] = wet;
+        }
+
+        // OJU 2.0 Output: vocal rider (slowly rides the level towards the song's own average)
+        const float mRide = riderMix.getNextValue();
+        if (mRide > 0.0f)
+        {
+            float pw = 0.0f;
+            for (int c = 0; c < nch; ++c)
+                pw = juce::jmax (pw, wetv[c] * wetv[c]);
+            const float instDb = 4.3429448f * std::log (pw + 1.0e-12f);
+            riderEnvDb = instDb + riderEnvCoef * (riderEnvDb - instDb);
+            if (riderEnvDb > -45.0f)
+            {
+                riderTargetDb = riderEnvDb + riderTargetCoef * (riderTargetDb - riderEnvDb);
+                const float range = 2.0f + 8.0f * riderAmt;
+                const float want = juce::jlimit (-range, range, riderTargetDb - riderEnvDb);
+                riderDb = want + riderMoveCoef * (riderDb - want);
+            }
+            const float gRide = 1.0f + mRide * (dbToGain (riderDb) - 1.0f);
+            for (int c = 0; c < nch; ++c)
+                wetv[c] *= gRide;
+        }
+
+        for (int c = 0; c < nch; ++c)
+        {
+            const float wet = wetv[c];
 
             const float dry = dryRing.getSample (c, readRing);
             float y = (dry + amtMix * (wet - dry)) * gOut;
@@ -556,6 +769,10 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
     storeMax (outputPeak, outPk);
     storeMax (pressGrDb, grMax);
     storeMax (tameGrDb, tameMax);
+    storeMax (levelGrDb, levelMax);
+    if (deessAuto)
+        tameBandHz.store (juce::jlimit (3500.0f, 10000.0f, sibTrackedHz * 0.82f), std::memory_order_relaxed);
+    riderGainDb.store (riderDb, std::memory_order_relaxed);
 }
 
 } // namespace oju

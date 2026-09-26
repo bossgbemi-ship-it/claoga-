@@ -41,7 +41,7 @@ public:
     static Features analyse (const std::vector<float>& audio, const std::vector<char>& voicedFrames,
                              int frameLength, double sampleRate, int mode);
 
-    static constexpr double naturalSeconds = 4.0, extremeSeconds = 10.0;
+    static constexpr double naturalSeconds = 10.0, extremeSeconds = 10.0;   // OJU 2.0: Auto listens for 10 s
 
 private:
     void run() override;

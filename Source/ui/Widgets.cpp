@@ -61,14 +61,25 @@ LampSwitch::LampSwitch (juce::AudioProcessorValueTreeState& state, const juce::S
 }
 
 //==============================================================================
-SegmentedChoice::SegmentedChoice (juce::AudioProcessorValueTreeState& state, const juce::String& paramId)
+SegmentedChoice::SegmentedChoice (juce::AudioProcessorValueTreeState& state, const juce::String& paramId,
+                                  std::vector<int> segmentValues, juce::StringArray labels)
+    : values (std::move (segmentValues))
 {
     auto* p = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (paramId));
     jassert (p != nullptr);
-    names = p->choices;
+    if (values.empty())
+        for (int i = 0; i < p->choices.size(); ++i)
+            values.push_back (i);
+    for (auto v : values)
+        names.add (labels.isEmpty() ? p->choices[v] : labels[(int) names.size()]);
+
     attachment = std::make_unique<juce::ParameterAttachment> (*p, [this] (float v)
     {
-        selected = juce::roundToInt (v);
+        const int index = juce::roundToInt (v);
+        selected = -1;
+        for (size_t i = 0; i < values.size(); ++i)
+            if (values[i] == index)
+                selected = (int) i;
         repaint();
     });
     attachment->sendInitialUpdate();
@@ -87,7 +98,7 @@ void SegmentedChoice::mouseDown (const juce::MouseEvent& e)
 {
     const int i = indexAt (e.position);
     if (i >= 0 && i != selected)
-        attachment->setValueAsCompleteGesture ((float) i);
+        attachment->setValueAsCompleteGesture ((float) values[(size_t) i]);
 }
 
 void SegmentedChoice::mouseMove (const juce::MouseEvent& e)

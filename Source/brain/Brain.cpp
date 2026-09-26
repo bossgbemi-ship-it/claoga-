@@ -23,7 +23,42 @@ namespace
         /* R&B       */ { 0.5f, 2.0f, 1.5f, 0.95f, 3.0f, 3.5f, 6.0f, 3.0f, 0.30f, 4, 0.35f, 0.15f, 0.65f, 0.22f, 0.25f,  5.0f, "smooth and wide" },
         /* Pop       */ { 2.0f, 2.5f, 0.0f, 1.05f, 4.0f, 4.0f, 7.0f, 4.0f, 0.30f, 2, 0.22f, 0.10f, 0.50f, 0.14f, 0.30f,  0.0f, "polished and forward" },
         /* Soul      */ { 0.0f, 0.5f, 1.5f, 0.90f, 2.5f, 3.0f, 5.5f, 6.0f, 0.45f, 0, 0.12f, 0.14f, 0.40f, 0.15f, 0.20f, -5.0f, "warm and live" },
+        // OJU 2.0 genres
+        /* Rap       */ { 2.5f, 2.5f, 0.5f, 1.10f, 5.0f, 5.0f, 8.0f, 6.0f, 0.40f, 2, 0.18f, 0.10f, 0.30f, 0.08f, 0.35f,  3.0f, "tight and in your face" },
+        /* Amapiano  */ { 1.5f, 3.0f, 0.5f, 1.00f, 3.5f, 4.0f, 7.0f, 4.0f, 0.30f, 3, 0.35f, 0.16f, 0.55f, 0.18f, 0.25f,  0.0f, "airy and log-drum friendly" },
+        /* Gospel    */ { 1.0f, 2.0f, 1.5f, 0.90f, 3.0f, 3.5f, 6.0f, 3.0f, 0.30f, 4, 0.30f, 0.12f, 0.75f, 0.25f, 0.20f,  3.0f, "big, warm and uplifting" },
     };
+
+    // OJU 2.0 module targets per style
+    struct StyleV2
+    {
+        int verbType;               // 0 classic, 1 room, 2 plate, 3 hall
+        float echoDuck, verbDuck;
+        float breath, dbl, width;
+        bool hookOnly;
+        float level, tuneSpeed, humanize, rider;
+    };
+
+    //                          type echoD verbD breath dbl  width hook   level tuneS human rider
+    const StyleV2 profilesV2[] = {
+        /* Afrobeats */ { 2, 0.45f, 0.35f, 0.50f, 0.35f, 0.60f, true,  0.45f, 45.0f, 55.0f, 0.50f },
+        /* Trap      */ { 1, 0.50f, 0.40f, 0.60f, 0.40f, 0.70f, true,  0.55f, 75.0f, 30.0f, 0.60f },
+        /* R&B       */ { 3, 0.35f, 0.30f, 0.45f, 0.30f, 0.60f, false, 0.40f, 35.0f, 65.0f, 0.45f },
+        /* Pop       */ { 2, 0.40f, 0.35f, 0.50f, 0.35f, 0.60f, true,  0.50f, 55.0f, 45.0f, 0.50f },
+        /* Soul      */ { 1, 0.30f, 0.25f, 0.30f, 0.20f, 0.40f, false, 0.35f, 20.0f, 80.0f, 0.40f },
+        /* Rap       */ { 1, 0.55f, 0.45f, 0.65f, 0.45f, 0.75f, true,  0.60f, 70.0f, 35.0f, 0.60f },
+        /* Amapiano  */ { 2, 0.50f, 0.40f, 0.50f, 0.40f, 0.80f, true,  0.45f, 50.0f, 50.0f, 0.50f },
+        /* Gospel    */ { 3, 0.35f, 0.30f, 0.35f, 0.30f, 0.60f, false, 0.40f, 25.0f, 75.0f, 0.45f },
+    };
+
+    const char* voiceType (float lowestHz)
+    {
+        if (lowestHz < 95.0f)  return "Bass range";
+        if (lowestHz < 125.0f) return "Baritone range";
+        if (lowestHz < 160.0f) return "Tenor range";
+        if (lowestHz < 200.0f) return "Alto range";
+        return "Soprano range";
+    }
 
     float roundTo (float v, float step) { return std::round (v / step) * step; }
 
@@ -49,7 +84,9 @@ namespace
 
 BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
 {
-    const auto& p = profiles[juce::jlimit (0, 4, styleIndex)];
+    styleIndex = juce::jlimit (0, (int) std::size (profiles) - 1, styleIndex);
+    const auto& p = profiles[styleIndex];
+    const auto& p2 = profilesV2[styleIndex];
     const bool extreme = mode == 1;
     const float strength = extreme ? 1.0f : 0.7f;
     bpm = juce::jlimit (40.0, 240.0, bpm > 0.0 ? bpm : 120.0);
@@ -78,7 +115,7 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
     if (f.rumbleDb > 3.0f)
         lines.push_back ({ 4.0f + f.rumbleDb * 0.3f, "Rumble under 70 Hz" + dash() + "low cut at " + hz (lowCut) });
     else
-        lines.push_back ({ 1.0f, "Clean lows" + dash() + "low cut at " + hz (lowCut) + ", just under your voice" });
+        lines.push_back ({ 2.2f, juce::String (voiceType (f.lowestVoiceHz)) + dash() + "high-pass at " + hz (lowCut) + ", just under your voice" });
 
     // ---- Mud / box: one moveable cut aimed at whichever is worse
     const bool boxWins = f.boxExcessDb > f.mudExcessDb + 0.5f;
@@ -204,12 +241,44 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
     set (ids::delayMix, roundTo (p.echo * (extreme ? 1.2f : 1.0f) * 100.0f, 1.0f));
     set (ids::reverbSize, p.size * 100.0f);
     set (ids::reverbMix, roundTo (p.verb * (extreme ? 1.15f : 1.0f) * 100.0f, 1.0f));
-    lines.push_back ({ 1.8f, "Space on " + delayDivisionNames()[division] + " at " + juce::String (juce::roundToInt (bpm)) + " BPM" + dash() + p.flavour });
+    lines.push_back ({ 1.8f, "Space on " + delayDivisionNames()[division] + " at " + juce::String (juce::roundToInt (bpm)) + " BPM, "
+                             + verbTypeNames()[p2.verbType].toLowerCase() + " verb that blooms in the gaps" + dash() + p.flavour });
 
     // ---- Master
     set (ids::amount, 100.0f);
     set (ids::outputGain, 0.0f);
     set (ids::ceilingOn, 1.0f);
+
+    //--------------------------------------------------------------------------
+    // OJU 2.0: Auto now sets all 12 modules
+    set (ids::plosiveOn, 1.0f);
+    set (ids::plosiveAmount, extreme ? 70.0f : 50.0f);
+    set (ids::deessAuto, 1.0f);
+
+    set (ids::levelOn, 1.0f);
+    set (ids::levelAmount, roundTo (p2.level * 100.0f * (extreme ? 1.2f : 1.0f), 1.0f));
+
+    set (ids::breathOn, 1.0f);
+    set (ids::breathAmount, roundTo (p2.breath * 100.0f * (extreme ? 1.25f : 1.0f), 1.0f));
+
+    set (ids::doubleOn, 1.0f);
+    set (ids::doubleAmount, roundTo (p2.dbl * 100.0f * (extreme ? 1.2f : 1.0f), 1.0f));
+    set (ids::width, roundTo (p2.width * 100.0f, 1.0f));
+    set (ids::hookOnly, p2.hookOnly ? 1.0f : 0.0f);
+
+    set (ids::echoOn, 1.0f);
+    set (ids::verbOn, 1.0f);
+    set (ids::echoDuck, roundTo (p2.echoDuck * 100.0f, 1.0f));
+    set (ids::verbType, (float) p2.verbType);
+    set (ids::verbDuck, roundTo (p2.verbDuck * 100.0f, 1.0f));
+
+    set (ids::riderOn, 1.0f);
+    set (ids::riderAmount, roundTo (p2.rider * 100.0f, 1.0f));
+    set (ids::limiterOn, 1.0f);
+    set (ids::limiterCeiling, -1.0f);
+
+    set (ids::tuneSpeed, extreme ? juce::jmin (100.0f, p2.tuneSpeed + 20.0f) : p2.tuneSpeed);
+    set (ids::tuneHumanize, extreme ? juce::jmax (0.0f, p2.humanize - 20.0f) : p2.humanize);
 
     // ---- Keep the 6 most important lines, in a natural reading order
     std::vector<size_t> order (lines.size());
