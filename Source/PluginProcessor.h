@@ -72,6 +72,11 @@ public:
     juce::AudioProcessorValueTreeState& getState() noexcept { return apvts; }
 
     // OJU 2.0
+    void learnRoom();
+    bool isLearningRoom() noexcept          { return engine.getDenoiser().isLearning(); }
+    float getRoomLearnProgress() noexcept   { return engine.getDenoiser().learnProgress(); }
+    bool hasRoomProfile() const noexcept    { return roomProfileValid; }
+
     float getCpuLoad() const noexcept { return cpuLoad.load (std::memory_order_relaxed); }
     static juce::File presetsDirectory();
     bool savePreset (const juce::File& file);
@@ -133,6 +138,9 @@ private:
     int readVersion = 0;
     int lastStyle = -1, lastMode = -1;
     std::atomic<int> loadedStyle { -1 }, loadedMode { -1 };
+
+    std::array<float, Denoiser::profileBands> roomProfile {};
+    bool roomProfileValid = false;
 
     juce::CriticalSection pendingLock, extraCacheLock;
     juce::ValueTree extraCache;

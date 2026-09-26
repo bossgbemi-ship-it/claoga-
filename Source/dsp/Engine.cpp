@@ -20,11 +20,15 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     chain.prepare (sampleRate, maxBlockSize, numChannels);
     plosive.prepare (fs, maxBlock, channels);
     limiter.prepare (fs, maxBlock);
+    denoiser.prepare (fs, maxBlock);
     breath.prepare (fs);
     doubler.prepare (fs, maxBlock);
 
     chunkBuffer.setSize (VocalChain::maxChannels, maxBlock);
     rawCopy.setSize (VocalChain::maxChannels, maxBlock);
+    rawDelay.setSize (VocalChain::maxChannels, (int) std::ceil (fs * 0.25) + maxBlock + 2);   // room for Denoise + Tune
+    rawDelay.clear();
+    rawWrite = 0;
     prepared = true;
 }
 
@@ -33,14 +37,23 @@ void Engine::reset()
     chain.reset();
     plosive.reset();
     limiter.reset();
+    denoiser.reset();
+    rawDelay.clear();
     breath.reset();
     doubler.reset();
+}
+
+int Engine::preLatencyFor (const EngineSettings& s) const noexcept
+{
+    if (s.chain.trackMode)
+        return 0;   // Track mode: lookahead modules rest
+    return s.denoiseOn ? denoiser.latencySamples() : 0;
 }
 
 int Engine::latencyFor (const EngineSettings& s) const noexcept
 {
     const bool track = s.chain.trackMode;
-    int l = chain.getLatencySamples (track);
+    int l = preLatencyFor (s) + chain.getLatencySamples (track);
     if (s.limiterOn)
         l += limiter.latencySamples (track);
     return l;
@@ -68,11 +81,15 @@ void Engine::process (juce::AudioBuffer<float>& buffer, const EngineSettings& s)
 
 void Engine::processChunk (float* const* ch, int nch, int n, const EngineSettings& s) noexcept
 {
-    const bool pre = s.plosiveOn;
+    const bool denoiseActive = s.denoiseOn && ! s.chain.trackMode;
+    const bool pre = s.plosiveOn || denoiseActive;
+    const int preLatency = preLatencyFor (s);
 
     // Start modules from a clean state when they are switched on.
     if (s.plosiveOn && ! lastPlosive) plosive.reset();
     if (s.limiterOn && ! lastLimiter) limiter.reset();
+    if (denoiseActive && ! lastDenoise) denoiser.reset();
+    lastDenoise = denoiseActive;
     if (s.breathOn && ! lastBreath) breath.reset();
     if (s.doubleOn && ! lastDouble) doubler.reset();
     lastPlosive = s.plosiveOn;
@@ -80,12 +97,29 @@ void Engine::processChunk (float* const* ch, int nch, int n, const EngineSetting
     lastBreath = s.breathOn;
     lastDouble = s.doubleOn;
 
-    // Keep the untouched input for the chain's dry (Amount) and bypass paths.
+    // Keep the untouched input for the chain's dry (Amount) and bypass paths,
+    // delayed by exactly the latency of the modules in front of the chain.
     if (pre)
+    {
+        const int size = rawDelay.getNumSamples();
         for (int c = 0; c < nch; ++c)
-            juce::FloatVectorOperations::copy (rawCopy.getWritePointer (c), ch[c], n);
+        {
+            float* dst = rawCopy.getWritePointer (c);
+            float* ring = rawDelay.getWritePointer (c);
+            for (int i = 0; i < n; ++i)
+            {
+                const int w = (rawWrite + i) % size;
+                ring[w] = ch[c][i];
+                dst[i] = ring[(w - preLatency + size) % size];
+            }
+        }
+        rawWrite = (rawWrite + n) % size;
+    }
 
     // ---- modules before the v1 chain
+    if (denoiseActive)
+        denoiser.process (ch, nch, n, s.denoiseAmount, s.roomAmount, s.chain.extreme);
+
     if (s.plosiveOn)
         storeMax (plosiveDb, plosive.process (ch, nch, n, s.plosiveAmount));
 

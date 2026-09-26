@@ -5,7 +5,7 @@ namespace oju
 {
 namespace
 {
-    const juce::Identifier extraTag ("OJU_EXTRA"), readTag ("READ"), lineTag ("LINE"), featTag ("FEATURES"),
+    const juce::Identifier roomTag ("ROOM"), extraTag ("OJU_EXTRA"), readTag ("READ"), lineTag ("LINE"), featTag ("FEATURES"),
                            slotTag ("SLOT"), textAttr ("text"), ideaAttr ("idea"), activeAttr ("activeSlot"),
                            indexAttr ("index"), versionAttr ("version");
 }
@@ -155,6 +155,9 @@ EngineSettings OjuProcessor::readEngineSettings() const noexcept
     if (v1Compare.load (std::memory_order_relaxed))
         return e;
 
+    e.denoiseOn = pDenoiseOn.get() > 0.5f;
+    e.denoiseAmount = pDenoiseAmt.get() * 0.01f;
+    e.roomAmount = pRoomAmt.get() * 0.01f;
     e.plosiveOn = pPlosiveOn.get() > 0.5f;
     e.plosiveAmount = pPlosiveAmt.get() * 0.01f;
     e.limiterOn = pLimiterOn.get() > 0.5f;
@@ -253,9 +256,22 @@ void OjuProcessor::applyBrain (const Features& f, bool rewriteRead)
     refreshExtraCache();
 }
 
+void OjuProcessor::learnRoom()
+{
+    setParam (ids::denoiseOn, 1.0f);
+    engine.getDenoiser().startLearning();
+}
+
 void OjuProcessor::timerCallback()
 {
     applyPendingExtra();
+
+    // OJU 2.0: a freshly learned room fingerprint gets saved with the session
+    if (engine.getDenoiser().takeLearnedProfile (roomProfile))
+    {
+        roomProfileValid = true;
+        refreshExtraCache();
+    }
 
     // OJU 2.0: latency depends on which modules are on and on Track / Mix mode.
     if (const int lat = engine.latencyFor (readEngineSettings()); lat != getLatencySamples())
@@ -475,6 +491,16 @@ void OjuProcessor::refreshExtraCache()
     extra.appendChild (read, nullptr);
     extra.appendChild (featuresToTree (features), nullptr);
 
+    if (roomProfileValid)
+    {
+        juce::StringArray values;
+        for (auto v : roomProfile)
+            values.add (juce::String (v, 2));
+        juce::ValueTree room (roomTag);
+        room.setProperty ("db", values.joinIntoString (" "), nullptr);
+        extra.appendChild (room, nullptr);
+    }
+
     extra.setProperty (activeAttr, activeSlot, nullptr);
     for (int i = 0; i < 2; ++i)
     {
@@ -545,6 +571,18 @@ void OjuProcessor::applyPendingExtra()
     for (auto line : read)
         readLines.add (line.getProperty (textAttr).toString());
     features = treeToFeatures (extra.getChildWithName (featTag));
+
+    // Learn Room fingerprint (OJU 2.0); v1 presets have none
+    {
+        auto room = extra.getChildWithName (roomTag);
+        juce::StringArray values;
+        values.addTokens (room.getProperty ("db").toString(), " ", {});
+        roomProfileValid = room.isValid() && values.size() == Denoiser::profileBands;
+        if (roomProfileValid)
+            for (int i = 0; i < Denoiser::profileBands; ++i)
+                roomProfile[(size_t) i] = values[i].getFloatValue();
+        engine.getDenoiser().setProfile (roomProfile, roomProfileValid);
+    }
 
     activeSlot = juce::jlimit (0, 1, (int) extra.getProperty (activeAttr, 0));
     slots[0] = {};

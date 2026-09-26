@@ -827,6 +827,120 @@ static void testPhase2Modules()
     check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
 }
 
+static void testPhase3Denoise()
+{
+    std::puts ("\nOJU 2.0 phase 3: Denoise (RNNoise) + Learn Room");
+    const double sr = 48000.0;
+    bool finite = true;
+    auto p0 = makeProcessor (sr, 256);
+    const int N = p0->getEngine().getDenoiser().latencySamples();
+
+    // ---- transparent at amount 0 (only delayed)
+    {
+        auto in = v2::singer (sr, -16.0f, 2.0);
+        auto off = makeProcessor (sr, 256); v2::neutral (*off);
+        auto on = makeProcessor (sr, 256);  v2::neutral (*on);
+        setParam (*on, oju::ids::denoiseOn, 1.0f);
+        setParam (*on, oju::ids::denoiseAmount, 0.0f);
+        on->pumpMessageThreadWork();
+        const auto a = v2::run (*off, in, 256, finite);
+        const auto b = v2::run (*on, in, 256, finite);
+        double err = 0.0, sig = 0.0;
+        for (int i = N + 4800; i < a.getNumSamples(); ++i)
+        {
+            const double d = b.getSample (0, i) - a.getSample (0, i - N);
+            err += d * d; sig += (double) a.getSample (0, i - N) * a.getSample (0, i - N);
+        }
+        const float errDb = (float) (10.0 * std::log10 (err / sig + 1.0e-30));
+        check (errDb < -70.0f, "denoise at 0% is transparent apart from its " + juce::String (N) + "-sample delay (error "
+                               + juce::String (errDb, 1) + " dB)");
+        check (on->getLatencySamples() == 4 + N, "denoise latency reported: " + juce::String (on->getLatencySamples()) + " samples");
+        setParam (*on, oju::ids::latencyMode, 1.0f);
+        on->pumpMessageThreadWork();
+        check (on->getLatencySamples() == 0, "Track mode: denoise rests, latency 0");
+    }
+
+    // ---- noisy vocal: noise in the gaps goes down, notes and tails survive
+    auto noisy = v2::singer (sr, -16.0f, 6.0);
+    {
+        juce::Random rng (11);
+        for (int i = 0; i < noisy.getNumSamples(); ++i)
+        {
+            const float nz = (rng.nextFloat() * 2.0f - 1.0f) * 0.01f;   // about -45 dBFS hiss
+            for (int c = 0; c < 2; ++c) noisy.setSample (c, i, noisy.getSample (c, i) + nz);
+        }
+    }
+    auto clean = v2::singer (sr, -16.0f, 6.0);
+    for (int extreme = 0; extreme < 2; ++extreme)
+    {
+        auto p = makeProcessor (sr, 256);
+        setParam (*p, oju::ids::mode, (float) extreme);   // (with no read, this applies the genre preset...)
+        p->pumpMessageThreadWork();
+        v2::neutral (*p);                                  // (...so switch everything else off afterwards)
+        for (auto* id : { oju::ids::plosiveOn, oju::ids::levelOn, oju::ids::breathOn, oju::ids::doubleOn,
+                          oju::ids::riderOn, oju::ids::limiterOn, oju::ids::deessAuto })
+            setParam (*p, id, 0.0f);
+        setParam (*p, oju::ids::denoiseOn, 1.0f);
+        setParam (*p, oju::ids::denoiseAmount, 100.0f);
+        p->pumpMessageThreadWork();
+        const auto out = v2::run (*p, noisy, 256, finite);
+        const int L = p->getLatencySamples();
+        // gap between phrases (2.45-2.95 s), and the sung phrase
+        const float gapIn = v2::rmsDb (noisy, (int) (5.5 * sr), (int) (0.4 * sr));
+        const float gapOut = v2::rmsDb (out, (int) (5.5 * sr) + L, (int) (0.4 * sr));
+        const float sungIn = v2::rmsDb (clean, (int) (3.4 * sr), (int) (1.8 * sr));
+        const float sungOut = v2::rmsDb (out, (int) (3.4 * sr) + L, (int) (1.8 * sr));
+        const float tailIn = v2::rmsDb (clean, (int) (5.20 * sr), (int) (0.15 * sr));
+        const float tailOut = v2::rmsDb (out, (int) (5.20 * sr) + L, (int) (0.15 * sr));
+        const juce::String m = extreme ? "Extreme" : "Natural";
+        check (gapIn - gapOut > (extreme ? 15.0f : 9.0f), m + ": noise in the gaps down " + juce::String (gapIn - gapOut, 1) + " dB");
+        check (std::abs (sungIn - sungOut) < 1.5f, m + ": singing level kept (" + juce::String (sungOut - sungIn, 2) + " dB)");
+        check (tailIn - tailOut < 3.0f, m + ": sustained-note tail not chopped (" + juce::String (tailOut - tailIn, 2) + " dB)");
+    }
+
+    // ---- Learn Room: fingerprint 2 s of hum + hiss, then remove it
+    {
+        auto room = [&] (int samples)
+        {
+            juce::AudioBuffer<float> b (2, samples);
+            juce::Random rng (3);
+            for (int i = 0; i < samples; ++i)
+            {
+                const float t = (float) i / (float) sr;
+                const float v = 0.01f * std::sin (juce::MathConstants<float>::twoPi * 60.0f * t)
+                              + 0.004f * std::sin (juce::MathConstants<float>::twoPi * 180.0f * t)
+                              + (rng.nextFloat() * 2.0f - 1.0f) * 0.002f;
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            return b;
+        };
+        auto p = makeProcessor (sr, 256); v2::neutral (*p);
+        setParam (*p, oju::ids::denoiseAmount, 30.0f);
+        setParam (*p, oju::ids::roomAmount, 100.0f);
+        p->learnRoom();
+        p->pumpMessageThreadWork();
+        const auto silence = room ((int) (3.0 * sr));
+        v2::run (*p, silence, 256, finite);
+        p->pumpMessageThreadWork();
+        check (p->hasRoomProfile(), "Learn Room captured the room in 2 s of silence");
+
+        const auto after = v2::run (*p, silence, 256, finite);
+        const float humIn = v2::bandRmsDb (silence, sr, oju::SvfType::bandpass, 60.0, (int) (1.0 * sr), (int) (1.5 * sr));
+        const float humOut = v2::bandRmsDb (after, sr, oju::SvfType::bandpass, 60.0, (int) (1.0 * sr), (int) (1.5 * sr));
+        check (humIn - humOut > 12.0f, "learned room: 60 Hz hum down " + juce::String (humIn - humOut, 1) + " dB");
+
+        juce::MemoryBlock mb;
+        p->getStateInformation (mb);
+        auto q = makeProcessor (sr, 256);
+        q->setStateInformation (mb.getData(), (int) mb.getSize());
+        q->pumpMessageThreadWork();
+        check (q->hasRoomProfile(), "room fingerprint saved and restored with the session");
+    }
+
+    check (finite, "all phase 3 renders finite");
+    check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -871,6 +985,7 @@ int main (int argc, char** argv)
     testMono();
     testPhase1Modules();
     testPhase2Modules();
+    testPhase3Denoise();
     if (juce::SystemStats::getEnvironmentVariable ("OJU_SKIP_EDITOR", {}).isEmpty())
         testEditor (outDir);
 

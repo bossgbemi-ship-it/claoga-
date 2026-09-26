@@ -5,6 +5,7 @@
 #include "modules/Limiter.h"
 #include "modules/BreathControl.h"
 #include "modules/Doubler.h"
+#include "modules/Denoiser.h"
 
 namespace oju
 {
@@ -13,6 +14,7 @@ struct EngineSettings
 {
     ChainSettings chain;              // v1 chain (+ its 2.0 insertions)
 
+    bool  denoiseOn = false;  float denoiseAmount = 0.6f, roomAmount = 0.5f;
     bool  plosiveOn = false;  float plosiveAmount = 0.5f;
     bool  limiterOn = false;  float limiterCeilingDb = -1.0f;
     bool  breathOn = false;   float breathAmount = 0.5f;
@@ -38,6 +40,7 @@ public:
     int latencyFor (const EngineSettings& s) const noexcept;
 
     VocalChain& getChain() noexcept { return chain; }
+    Denoiser& getDenoiser() noexcept { return denoiser; }
 
     std::atomic<float> plosiveDb { 0.0f }, limiterGrDb { 0.0f }, breathDb { 0.0f }, doubleEngaged { 0.0f };
     int getBreathCount() const noexcept { return breath.getBreathCount(); }
@@ -49,7 +52,10 @@ private:
 
     void processChunk (float* const* ch, int nch, int n, const EngineSettings& s) noexcept;
 
+    int preLatencyFor (const EngineSettings& s) const noexcept;
+
     VocalChain chain;
+    Denoiser denoiser;
     PlosiveTamer plosive;
     Limiter limiter;
     BreathControl breath;
@@ -59,8 +65,9 @@ private:
     int maxBlock = 512, channels = 2;
     bool prepared = false;
 
-    juce::AudioBuffer<float> chunkBuffer, rawCopy;
-    bool lastPlosive = false, lastLimiter = false, lastBreath = false, lastDouble = false;
+    juce::AudioBuffer<float> chunkBuffer, rawCopy, rawDelay;
+    int rawWrite = 0;
+    bool lastPlosive = false, lastLimiter = false, lastBreath = false, lastDouble = false, lastDenoise = false;
 };
 
 } // namespace oju

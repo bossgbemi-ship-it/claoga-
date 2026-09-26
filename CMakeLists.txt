@@ -66,6 +66,7 @@ set(OJU_SOURCES
     Source/Parameters.cpp
     Source/dsp/VocalChain.cpp
     Source/dsp/Engine.cpp
+    Source/dsp/modules/Denoiser.cpp
     Source/brain/Listener.cpp
     Source/brain/Brain.cpp
     Source/ui/Theme.cpp
@@ -78,8 +79,22 @@ set(OJU_SOURCES
     Source/ui/ModuleViews.cpp
     Source/ui/PluginEditor.cpp)
 
+# RNNoise (BSD-3-Clause), vendored in third_party/rnnoise
+set(OJU_RNNOISE_SOURCES
+    third_party/rnnoise/src/denoise.c
+    third_party/rnnoise/src/rnn.c
+    third_party/rnnoise/src/rnn_data.c
+    third_party/rnnoise/src/pitch.c
+    third_party/rnnoise/src/kiss_fft.c
+    third_party/rnnoise/src/celt_lpc.c)
+set_source_files_properties(${OJU_RNNOISE_SOURCES} PROPERTIES
+    COMPILE_DEFINITIONS "_USE_MATH_DEFINES"
+    COMPILE_OPTIONS "$<IF:$<C_COMPILER_ID:MSVC>,/W0,-w>")
+list(APPEND OJU_SOURCES ${OJU_RNNOISE_SOURCES})
+set(OJU_INCLUDES Source third_party/rnnoise/include)
+
 target_sources(OJU PRIVATE ${OJU_SOURCES})
-target_include_directories(OJU PRIVATE Source)
+target_include_directories(OJU PRIVATE ${OJU_INCLUDES})
 
 set(OJU_DEFINITIONS
     JUCE_WEB_BROWSER=0
@@ -112,7 +127,7 @@ target_link_libraries(OJU
 if(OJU_BUILD_TESTS)
     juce_add_console_app(OJUTests PRODUCT_NAME "OJUTests")
     target_sources(OJUTests PRIVATE Tests/OjuTests.cpp ${OJU_SOURCES})
-    target_include_directories(OJUTests PRIVATE Source)
+    target_include_directories(OJUTests PRIVATE ${OJU_INCLUDES})
     target_compile_definitions(OJUTests PRIVATE ${OJU_DEFINITIONS} OJU_TEST_BUILD=1 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(OJUTests
         PRIVATE
@@ -125,7 +140,7 @@ endif()
 if(OJU_BUILD_TESTS)
     juce_add_console_app(OJURender PRODUCT_NAME "OJURender")
     target_sources(OJURender PRIVATE Tests/Render.cpp ${OJU_SOURCES})
-    target_include_directories(OJURender PRIVATE Source)
+    target_include_directories(OJURender PRIVATE ${OJU_INCLUDES})
     target_compile_definitions(OJURender PRIVATE ${OJU_DEFINITIONS} JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(OJURender PRIVATE ${OJU_MODULES} ${OJU_EXTRA_LIBS}
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

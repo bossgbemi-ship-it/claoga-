@@ -196,6 +196,7 @@ void OjuEditor::buildViews()
         addKnob (v, ids::roomAmount, "Room", 1, 0);
         learnRoomButton = makeButton (v, "Learn room", { 240, 20, 150, 44 });
         learnRoomButton->setTooltip ("Stay quiet for 2 seconds: OJU fingerprints the room noise");
+        learnRoomButton->onClick = [this] { ojuProcessor.learnRoom(); };
         denoiseInfo = makeReadout (v, "Room", { 240, 74, 390, 70 });
     }
 
@@ -384,7 +385,10 @@ juce::String OjuEditor::tileStatus (int id) const
 
     switch (id)
     {
-        case mDenoise:  return track ? juce::String ("Rests in Track mode") : text (ids::denoiseAmount) + " clean";
+        case mDenoise:
+            if (track) return "Rests in Track mode";
+            if (ojuProcessor.isLearningRoom()) return "Learning room...";
+            return text (ids::denoiseAmount) + (ojuProcessor.hasRoomProfile() ? " + room" : juce::String());
         case mCleanup:  return "HPF " + text (ids::lowCutFreq) + (val (ids::plosiveOn) > 0.5f ? dot() + "pops tamed" : juce::String());
         case mTune:
             if (track) return "Rests in Track mode";
@@ -607,7 +611,14 @@ void OjuEditor::timerCallback()
 
     const bool track = ojuProcessor.getParameterValue (ids::latencyMode) > 0.5f;
     if (denoiseInfo != nullptr)
-        denoiseInfo->set (track ? juce::String ("Denoise rests in Track mode (it needs lookahead)") : juce::String ("Not learned yet"));
+    {
+        juce::String t;
+        if (track)                                 t = "Denoise rests in Track mode (it needs lookahead)";
+        else if (ojuProcessor.isLearningRoom())    t = "Listening to the room... stay quiet (" + juce::String (juce::roundToInt (ojuProcessor.getRoomLearnProgress() * 100.0f)) + "%)";
+        else if (ojuProcessor.hasRoomProfile())    t = "Room learned: its hum and hiss are removed too";
+        else                                       t = "Not learned yet: press Learn room and stay quiet for 2 s";
+        denoiseInfo->set (t);
+    }
     if (cleanupInfo != nullptr)
     {
         const auto& f = ojuProcessor.getFeatures();
