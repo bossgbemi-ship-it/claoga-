@@ -54,12 +54,15 @@ OjuProcessor::OjuProcessor()
     bind (pCarveOn, ids::carveOn);         bind (pCarveDepth, ids::carveDepth);
 
     setLatencySamples (VocalChain::expectedLatencySamples());
+    linkSlot = hub->acquire();
     startTimerHz (20);
 }
 
 OjuProcessor::~OjuProcessor()
 {
     stopTimer();
+    beatFilePool.removeAllJobs (true, 5000);
+    hub->release (linkSlot);
 }
 
 //==============================================================================
@@ -78,7 +81,9 @@ void OjuProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     const int channels = juce::jmax (1, juce::jmin (2, getTotalNumOutputChannels()));
     engine.prepare (sampleRate, samplesPerBlock, channels);
     listener.setSampleRate (sampleRate);
-    setLatencySamples (engine.latencyFor (readEngineSettings()));
+    beatKey.setSampleRate (sampleRate);
+    carve.prepare (sampleRate);
+    setLatencySamples (pRole.get() > 0.5f ? 0 : engine.latencyFor (readEngineSettings()));
 }
 
 void OjuProcessor::releaseResources()
@@ -196,11 +201,39 @@ void OjuProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
                     hostBpm.store (*bpm, std::memory_order_relaxed);
 
     const int chans = juce::jmin (2, numIn, buffer.getNumChannels());
-    if (listener.isCapturing())
-        listener.pushAudio (buffer.getArrayOfReadPointers(), chans, n);
-
     const auto t0 = juce::Time::getHighResolutionTicks();
-    engine.process (buffer, readEngineSettings());
+    blocksProcessed.fetch_add (1, std::memory_order_relaxed);
+
+    if (pRole.get() > 0.5f)
+    {
+        // ---- OJU Beat: hear the key, and carve room for the vocal while it sings
+        beatKey.push (buffer.getArrayOfReadPointers(), chans, n);
+        std::array<float, LinkHub::numFocus> hz { 300.0f, 2500.0f, 5000.0f }, weight { 0.5f, 1.0f, 0.6f };
+        const float activity = linkSlot >= 0 ? hub->vocalFocus ((int) std::lround (pLinkGroup.get()), linkSlot, hz, weight) : 0.0f;
+        const bool carving = pCarveOn.get() > 0.5f && pBypass.get() < 0.5f;
+        const float maxCut = pCarveDepth.get() * 0.01f * (pMode.get() > 0.5f ? 9.0f : 6.0f);
+        carveDipDb.store (carve.process (buffer.getArrayOfWritePointers(), chans, n, carving ? activity : 0.0f, maxCut, hz, weight),
+                          std::memory_order_relaxed);
+    }
+    else
+    {
+        // ---- vocal: tell linked beats how much we are singing right now
+        float pw = 0.0f;
+        for (int c = 0; c < chans; ++c)
+            pw = juce::jmax (pw, buffer.getRMSLevel (c, 0, n));
+        const float db = juce::Decibels::gainToDecibels (pw, -100.0f);
+        const float target = juce::jlimit (0.0f, 1.0f, (db + 50.0f) / 25.0f);
+        const float decay = std::exp (-(float) n / (float) (0.15 * currentRate.load (std::memory_order_relaxed)));
+        const float act = juce::jmax (target, vocalActivity.load (std::memory_order_relaxed) * decay);
+        vocalActivity.store (act, std::memory_order_relaxed);
+        if (linkSlot >= 0)
+            hub->slot (linkSlot).vocalActivity.store (act, std::memory_order_relaxed);
+
+        if (listener.isCapturing())
+            listener.pushAudio (buffer.getArrayOfReadPointers(), chans, n);
+
+        engine.process (buffer, readEngineSettings());
+    }
 
     // CPU meter: time spent in this callback relative to the audio it covers.
     const double spent = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
@@ -287,9 +320,27 @@ void OjuProcessor::timerCallback()
         refreshExtraCache();
     }
 
-    // OJU 2.0: latency depends on which modules are on and on Track / Mix mode.
-    if (const int lat = engine.latencyFor (readEngineSettings()); lat != getLatencySamples())
+    // OJU 2.0: latency depends on which modules are on and on Track / Mix mode (Beat: none).
+    if (const int lat = pRole.get() > 0.5f ? 0 : engine.latencyFor (readEngineSettings()); lat != getLatencySamples())
         setLatencySamples (lat);
+
+    updateLink();
+
+    // key read from a beat file (background job finished)
+    {
+        const juce::ScopedLock sl (beatFileLock);
+        if (beatFileResultReady)
+        {
+            beatFileResultReady = false;
+            if (beatFileResult.key >= 0)
+            {
+                setParam (ids::tuneKey, (float) beatFileResult.key);
+                setParam (ids::tuneScale, beatFileResult.minor ? 1.0f : 0.0f);
+                keyOrigin = "from the beat file: " + beatFileResult.how;
+                refreshExtraCache();
+            }
+        }
+    }
 
     // Settle style/mode after a state load so it doesn't count as a user change.
     if (const int ls = loadedStyle.exchange (-1); ls >= 0) lastStyle = ls;
@@ -324,6 +375,82 @@ void OjuProcessor::timerCallback()
                 applyBrain (neutralFeatures(), false);
         }
     }
+}
+
+//==============================================================================
+void OjuProcessor::updateLink()
+{
+    if (linkSlot < 0)
+        return;
+    auto& slot = hub->slot (linkSlot);
+    const bool isBeat = pRole.get() > 0.5f;
+    const int group = (int) std::lround (pLinkGroup.get());
+    slot.role = isBeat ? 1 : 0;
+    slot.group = group;
+    slot.heartbeat = juce::Time::currentTimeMillis();
+
+    // host stopped calling us: we are not singing
+    const auto blocks = blocksProcessed.load();
+    if (blocks == lastBlocksSeen)
+    {
+        vocalActivity.store (0.0f);
+        slot.vocalActivity.store (0.0f);
+    }
+    lastBlocksSeen = blocks;
+
+    LinkStatus st;
+    st.isBeat = isBeat;
+    if (isBeat)
+    {
+        slot.key = beatKey.getKey();
+        slot.keyMinor = beatKey.isMinor() ? 1 : 0;
+        slot.keyConfidence = beatKey.getConfidence();
+        st.peers = hub->count (group, 0, linkSlot);
+        st.key = beatKey.getKey();
+        st.minor = beatKey.isMinor();
+        st.confidence = beatKey.getConfidence();
+        st.heardSeconds = beatKey.getHeardSeconds();
+        st.carveDb = carveDipDb.load();
+    }
+    else
+    {
+        // where this voice lives, so the beat knows what to carve
+        const float body = features.valid ? juce::jlimit (180.0f, 500.0f, features.lowestVoiceHz * 2.0f) : 300.0f;
+        slot.focusHz[0] = body;
+        slot.focusHz[1] = juce::jlimit (1500.0f, 5000.0f, pPresF.get());
+        slot.focusHz[2] = juce::jlimit (4000.0f, 9000.0f, pTameF.get() * 0.85f);
+
+        st.peers = hub->count (group, 1, linkSlot);
+        int k = -1; bool minor = true; float conf = 0.0f;
+        if (hub->beatKey (group, linkSlot, k, minor, conf))
+        {
+            st.key = k; st.minor = minor; st.confidence = conf;
+            // Key source Auto: Beat Link feeds Tune (only when the beat's key changes)
+            if (pTuneKeySource.get() < 0.5f && conf > 0.4f && (k != lastLinkKey || (minor ? 1 : 0) != lastLinkMinor))
+            {
+                setParam (ids::tuneKey, (float) k);
+                setParam (ids::tuneScale, minor ? 1.0f : 0.0f);
+                keyOrigin = "from Beat Link";
+                lastLinkKey = k;
+                lastLinkMinor = minor ? 1 : 0;
+                refreshExtraCache();
+            }
+        }
+    }
+    linkStatus = st;
+}
+
+void OjuProcessor::keyFromBeatFile (const juce::File& file)
+{
+    beatFileBusy = true;
+    beatFilePool.addJob ([this, file]
+    {
+        auto result = KeyDetector::keyFromFile (file);
+        const juce::ScopedLock sl (beatFileLock);
+        beatFileResult = result;
+        beatFileResultReady = true;
+        beatFileBusy = false;
+    });
 }
 
 Features OjuProcessor::neutralFeatures()

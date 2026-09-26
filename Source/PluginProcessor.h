@@ -5,6 +5,9 @@
 #include "dsp/Engine.h"
 #include "brain/Listener.h"
 #include "brain/Brain.h"
+#include "link/LinkHub.h"
+#include "dsp/modules/KeyDetector.h"
+#include "dsp/modules/Carve.h"
 
 namespace oju
 {
@@ -77,6 +80,14 @@ public:
     float getRoomLearnProgress() noexcept   { return engine.getDenoiser().learnProgress(); }
     bool hasRoomProfile() const noexcept    { return roomProfileValid; }
     const juce::String& getKeyOrigin() const noexcept { return keyOrigin; }
+
+    // Beat Link
+    struct LinkStatus { bool isBeat = false; int peers = 0; int key = -1; bool minor = true; float confidence = 0.0f;
+                        float heardSeconds = 0.0f; float carveDb = 0.0f; };
+    LinkStatus getLinkStatus() const noexcept { return linkStatus; }
+    void restartBeatKey() noexcept { beatKey.restart(); }
+    void keyFromBeatFile (const juce::File& file);
+    bool isReadingBeatFile() const noexcept { return beatFileBusy.load(); }
     void setKeyOrigin (const juce::String& s) { keyOrigin = s; }
 
     float getCpuLoad() const noexcept { return cpuLoad.load (std::memory_order_relaxed); }
@@ -143,6 +154,24 @@ private:
 
     std::array<float, Denoiser::profileBands> roomProfile {};
     juce::String keyOrigin;
+
+    // Beat Link
+    juce::SharedResourcePointer<LinkHub> hub;
+    int linkSlot = -1;
+    KeyDetector beatKey;
+    Carve carve;
+    std::atomic<float> carveDipDb { 0.0f }, vocalActivity { 0.0f };
+    std::atomic<juce::int64> blocksProcessed { 0 };
+    juce::int64 lastBlocksSeen = 0;
+    int lastLinkKey = -1, lastLinkMinor = -1;
+    LinkStatus linkStatus;
+    void updateLink();
+
+    juce::ThreadPool beatFilePool { 1 };
+    std::atomic<bool> beatFileBusy { false };
+    juce::CriticalSection beatFileLock;
+    KeyDetector::FileKey beatFileResult;
+    bool beatFileResultReady = false;
     bool roomProfileValid = false;
 
     juce::CriticalSection pendingLock, extraCacheLock;

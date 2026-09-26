@@ -1,4 +1,5 @@
 #include "Tuner.h"
+#include <algorithm>
 
 namespace oju
 {
@@ -145,7 +146,7 @@ bool Tuner::framesAround (int64_t time, Frame& before, Frame& after) const noexc
 {
     if (frameCount == 0)
         return false;
-    const int64_t oldest = juce::jmax ((int64_t) 0, frameCount - frameCap);
+    const int64_t oldest = std::max<int64_t> (0, frameCount - frameCap);
     for (int64_t i = frameCount - 1; i >= oldest; --i)
     {
         const auto& f = frames[(size_t) (i % frameCap)];
@@ -205,7 +206,7 @@ void Tuner::placeAnalysisMarks() noexcept
         {
             // snap to the waveform peak (glottal pulse) so grains stay phase-consistent
             const int64_t lastPos = markCount > 0 ? mark (markCount - 1).pos : -(int64_t) pMax;
-            const int64_t lo = juce::jmax (nextPredicted - half, lastPos + (int64_t) (0.6f * P));
+            const int64_t lo = std::max<int64_t> (nextPredicted - half, lastPos + (int64_t) (0.6f * P));
             const int64_t hi = nextPredicted + half;
             float best = -1.0e9f;
             for (int64_t q = lo; q <= hi; ++q)
@@ -220,7 +221,7 @@ void Tuner::placeAnalysisMarks() noexcept
         ++markCount;
         bool v2 = false;
         const float nextP = periodAt (pos, v2);
-        nextPredicted = pos + juce::jmax ((int64_t) 1, (int64_t) std::lround (voiced ? nextP : (float) pUnvoiced));
+        nextPredicted = pos + std::max<int64_t> (1, (int64_t) std::lround (voiced ? nextP : (float) pUnvoiced));
     }
 }
 
@@ -249,8 +250,8 @@ void Tuner::placeSynthesisMarks (int numCh) noexcept
             return;   // need the next mark before this grain can be built
 
         const auto& a = mark (k);
-        const int left = (int) juce::jlimit ((int64_t) 1, (int64_t) pMax, a.pos - mark (k - 1).pos);
-        const int right = (int) juce::jlimit ((int64_t) 1, (int64_t) pMax, mark (k + 1).pos - a.pos);
+        const int left = (int) std::clamp<int64_t> (a.pos - mark (k - 1).pos, 1, pMax);
+        const int right = (int) std::clamp<int64_t> (mark (k + 1).pos - a.pos, 1, pMax);
 
         if (s - left <= outputPos)
         {

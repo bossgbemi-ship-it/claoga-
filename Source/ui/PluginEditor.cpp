@@ -222,6 +222,17 @@ void OjuEditor::buildViews()
         auto k5 = &addKnob (v, ids::tuneMix, "Amount", 4, 0);              k5->setBounds (shift (cell (4, 0)).reduced (4).withHeight (126));
         loadBeatButton = makeButton (v, "Key from beat file", { 4, 182, 200, 40 });
         loadBeatButton->setTooltip ("Pick your beat: OJU reads its key tag, or listens to it");
+        loadBeatButton->onClick = [this]
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Pick the beat", juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                                                           "*.wav;*.mp3;*.aif;*.aiff;*.flac;*.ogg");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this] (const juce::FileChooser& fc)
+            {
+                if (fc.getResult().existsAsFile())
+                    ojuProcessor.keyFromBeatFile (fc.getResult());
+            });
+        };
         tuneInfo = makeReadout (v, "Key", { 220, 176, 420, 70 });
     }
 
@@ -498,6 +509,12 @@ void OjuEditor::unmuteStandaloneInput()
 
 void OjuEditor::eyeClicked()
 {
+    if (ojuProcessor.getParameterValue (ids::role) > 0.5f)
+    {
+        ojuProcessor.restartBeatKey();   // OJU Beat: listen to the beat afresh
+        return;
+    }
+
     const auto st = ojuProcessor.getListenState();
     const bool busy = st == Listener::State::listening || st == Listener::State::analysing;
 
@@ -562,9 +579,23 @@ void OjuEditor::timerCallback()
         case Listener::State::failed:    phase = EyeButton::Phase::failed; break;
         case Listener::State::idle:      break;
     }
-    eye.update (phase, progress, meters.in);
+    if (! beatRole)
+        eye.update (phase, progress, meters.in);
 
-    if (phase == EyeButton::Phase::listening)
+    const auto link = ojuProcessor.getLinkStatus();
+    auto keyText = [] (int k, bool minor) { return k < 0 ? juce::String ("--") : keyNames()[k] + (minor ? " minor" : " major"); };
+
+    if (beatRole)
+    {
+        eye.update (link.key >= 0 ? EyeButton::Phase::done : EyeButton::Phase::listening,
+                    juce::jlimit (0.0f, 1.0f, link.heardSeconds / 12.0f), meters.in);
+        if (link.key < 0)
+            eyeStatus.set ("OJU Beat", "Play the beat" + dot() + "listening for its key");
+        else
+            eyeStatus.set (keyText (link.key, link.minor), juce::String (juce::roundToInt (link.confidence * 100.0f)) + "% sure"
+                                                             + dot() + "tap to listen again");
+    }
+    else if (phase == EyeButton::Phase::listening)
     {
         stalledFrames = progress > lastProgress + 0.0001f ? 0 : stalledFrames + 1;
         lastProgress = progress;
@@ -664,7 +695,16 @@ void OjuEditor::timerCallback()
                              : juce::String ("Rider off"));
     }
     if (beatInfo != nullptr)
-        beatInfo->set ("Put this on the beat track: it finds the key and sends it to the vocal OJU");
+    {
+        juce::String t = link.key >= 0 ? "Key " + keyText (link.key, link.minor) + dot() + juce::String (juce::roundToInt (link.confidence * 100.0f))
+                                         + "% sure" + dot() + "heard " + juce::String (juce::roundToInt (link.heardSeconds)) + " s"
+                                       : juce::String ("Play the beat: OJU is listening for its key");
+        t << "\n" << (link.peers == 0 ? juce::String ("No vocal OJU linked yet (same link group)")
+                                        : juce::String (link.peers) + (link.peers == 1 ? " vocal" : " vocals") + " linked: the key goes to their Tune");
+        if (ojuProcessor.getParameterValue (ids::carveOn) > 0.5f)
+            t << dot() << "carving " << juce::String (link.carveDb, 1) << " dB now";
+        beatInfo->set (t);
+    }
 
     if (parallelKnob != nullptr)
     {
@@ -684,9 +724,21 @@ void OjuEditor::timerCallback()
 
     // ---- status column
     const double sr = juce::jmax (1.0, ojuProcessor.getCurrentSampleRate());
+    juce::String linkText;
+    bool linked = link.peers > 0;
+    if (link.isBeat)
+        linkText = linked ? juce::String (link.peers) + (link.peers == 1 ? " vocal linked" : " vocals linked") : juce::String ("No vocal linked");
+    else if (linked && link.key >= 0)
+        linkText = "Beat: " + keyText (link.key, link.minor);
+    else if (linked)
+        linkText = "Beat linked, finding key";
+    else
+        linkText = "No beat linked";
+    if (ojuProcessor.isReadingBeatFile())
+        linkText = "Reading beat file...";
     statusInfo.set ("CPU " + juce::String (ojuProcessor.getCpuLoad() * 100.0f, 1) + "% of a core",
                     "Latency " + juce::String (ojuProcessor.getLatencySamples() * 1000.0 / sr, 1) + " ms",
-                    "No beat linked", false);
+                    linkText, linked);
 
     abButton.setToggleState (ojuProcessor.getActiveSlot() == 1, juce::dontSendNotification);
     abButton.repaint();

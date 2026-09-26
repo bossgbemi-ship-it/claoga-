@@ -326,15 +326,30 @@ static void testLatencyAndAmount()
 static void testCpu()
 {
     std::puts ("\nCPU cost (single core, 48 kHz stereo, 256-sample blocks)");
-    for (int mode = 0; mode < 2; ++mode)
+    struct Config { const char* name; int mode; bool all; float limit; };
+    const Config configs[] = { { "v1 sound (2.0 modules off)", 0, false, 5.0f },
+                               { "all 12 modules on, Natural", 0, true, 12.0f },
+                               { "all 12 modules on, Extreme", 1, true, 12.0f } };
+    for (const auto& cfg : configs)
     {
         auto p = makeProcessor (48000.0, 256);
-        setParam (*p, oju::ids::mode, (float) mode);
+        setParam (*p, oju::ids::mode, (float) cfg.mode);
+        p->pumpMessageThreadWork();
+        if (! cfg.all)
+            for (auto* id : { oju::ids::plosiveOn, oju::ids::deessAuto, oju::ids::levelOn, oju::ids::breathOn, oju::ids::doubleOn,
+                              oju::ids::riderOn, oju::ids::limiterOn, oju::ids::tuneOn, oju::ids::denoiseOn })
+                setParam (*p, id, 0.0f);
+        else
+            for (auto* id : { oju::ids::denoiseOn, oju::ids::plosiveOn, oju::ids::lowCutOn, oju::ids::tuneOn, oju::ids::eqOn,
+                              oju::ids::tameOn, oju::ids::deessAuto, oju::ids::levelOn, oju::ids::pressOn, oju::ids::heatOn,
+                              oju::ids::breathOn, oju::ids::doubleOn, oju::ids::spaceOn, oju::ids::echoOn, oju::ids::verbOn,
+                              oju::ids::riderOn, oju::ids::limiterOn })
+                setParam (*p, id, 1.0f);
         setParam (*p, oju::ids::pressParallel, 35.0f);
+        p->pumpMessageThreadWork();
         FakeSinger singer (48000.0, -18.0f);
         const int blocks = (int) (30.0 * 48000.0 / 256.0);
         juce::AudioBuffer<float> buf (2, 256);
-        std::vector<float> src (256);
         juce::MidiBuffer midi;
         double seconds = 0.0;
         for (int b = 0; b < blocks; ++b)
@@ -345,11 +360,11 @@ static void testCpu()
             seconds += std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
         }
         const double pct = seconds / 30.0 * 100.0;
-        std::printf ("      %s: %.2f%% of one core (%.0fx real time)\n", mode == 0 ? "Natural" : "Extreme", pct, 30.0 / seconds);
+        std::printf ("      %s: %.2f%% of one core (%.0fx real time)\n", cfg.name, pct, 30.0 / seconds);
        #if JUCE_DEBUG
         juce::ignoreUnused (pct);
        #else
-        check (pct < 8.0, juce::String (mode == 0 ? "Natural" : "Extreme") + " is light enough for many instances");
+        check (pct < cfg.limit, juce::String (cfg.name) + " is light enough for many instances");
        #endif
     }
 }
@@ -1075,7 +1090,7 @@ static void testPhase4Tune()
         for (auto& pt : tune::track (in, sr))  if (pt.t > 0.3 && pt.t < 2.7) sumIn += std::abs (pt.midi - 57.0f) * 100.0;
         for (auto& pt : tune::track (out, sr, L)) if (pt.t > 0.3 && pt.t < 2.7) { sumOut += std::abs (pt.midi - 57.0f) * 100.0; ++cnt; }
         const auto trIn = tune::track (in, sr);
-        const float inErr = (float) (sumIn / juce::jmax<size_t> (1, trIn.size()));
+        const float inErr = (float) (sumIn / std::max<size_t> (1, trIn.size()));
         const float outErr = (float) (sumOut / juce::jmax (1, cnt));
         check (outErr < 8.0f, "sustained note: " + juce::String (inErr, 0) + " cents off -> " + juce::String (outErr, 1) + " cents (Hard)");
         check (std::abs (v2::rmsDb (out, (int) (1.0 * sr), (int) sr) - v2::rmsDb (in, (int) (1.0 * sr), (int) sr)) < 1.0f, "Tune keeps the level");
@@ -1131,8 +1146,8 @@ static void testPhase4Tune()
             std::vector<float> v;
             for (auto& pt : tune::track (out, sr, p->getLatencySamples()))
                 if (pt.t > 0.4 && pt.t < 2.6) v.push_back (pt.midi);
-            double m = 0; for (auto x : v) m += x; m /= juce::jmax<size_t> (1, v.size());
-            double sd = 0; for (auto x : v) sd += (x - m) * (x - m); sd = std::sqrt (sd / juce::jmax<size_t> (1, v.size()));
+            double m = 0; for (auto x : v) m += x; m /= std::max<size_t> (1, v.size());
+            double sd = 0; for (auto x : v) sd += (x - m) * (x - m); sd = std::sqrt (sd / std::max<size_t> (1, v.size()));
             meanErr = (float) std::abs (m - 57.0) * 100.0f;
             depth = (float) sd * 100.0f;
         };
@@ -1243,6 +1258,194 @@ static void testPhase4Tune()
     check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
 }
 
+//==============================================================================
+namespace beat
+{
+    // Am - F - C - G at 100 BPM: pads, bass, kick and hats
+    juce::AudioBuffer<float> make (double sr, double seconds)
+    {
+        const int chords[4][3] = { { 57, 60, 64 }, { 53, 57, 60 }, { 48, 52, 55 }, { 55, 59, 62 } };
+        const int bass[4] = { 45, 41, 48, 43 };
+        const double beatLen = 0.6, barLen = 2.4;
+        juce::AudioBuffer<float> b (2, (int) (seconds * sr));
+        juce::Random rng (4);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const double t = i / sr;
+            const int c = (int) (t / barLen) % 4;
+            auto tone = [&] (int midi, double amp)
+            {
+                const double f = 440.0 * std::pow (2.0, (midi - 69) / 12.0);
+                return amp * (std::sin (2 * 3.14159265 * f * t) + 0.3 * std::sin (4 * 3.14159265 * f * t));
+            };
+            double v = 0.0;
+            for (int k = 0; k < 3; ++k) v += tone (chords[c][k], 0.06);
+            v += tone (bass[c], 0.12);
+            const double tb = std::fmod (t, beatLen);
+            v += 0.4 * std::exp (-tb / 0.08) * std::sin (2 * 3.14159265 * 55.0 * tb);                  // kick
+            const double th = std::fmod (t + beatLen / 2, beatLen);
+            v += 0.05 * std::exp (-th / 0.02) * (rng.nextDouble() * 2 - 1);                              // hat
+            // a bright synth line in the vocal's range, so Carve has something to dip
+            v += 0.05 * std::sin (2 * 3.14159265 * 2500.0 * t) * (0.6 + 0.4 * std::sin (2 * 3.14159265 * 0.5 * t));
+            b.setSample (0, i, (float) v);
+            b.setSample (1, i, (float) v);
+        }
+        return b;
+    }
+
+    bool sameNotes (int key, bool minor, int refKey, bool refMinor)
+    {
+        for (int pc = 0; pc < 12; ++pc)
+            if (oju::Tuner::noteInScale (pc, key, minor ? 1 : 0) != oju::Tuner::noteInScale (pc, refKey, refMinor ? 1 : 0))
+                return false;
+        return true;
+    }
+
+    bool writeWav (const juce::File& f, const juce::AudioBuffer<float>& b, double sr)
+    {
+        f.deleteFile();
+        std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (f);
+        juce::WavAudioFormat wav;
+        auto w = wav.createWriterFor (os, juce::AudioFormatWriterOptions{}.withSampleRate (sr).withNumChannels (2).withBitsPerSample (24));
+        return w != nullptr && w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+    }
+}
+
+static void testPhase5BeatLink()
+{
+    std::puts ("\nOJU 2.0 phase 5: Beat Link + Carve");
+    const double sr = 48000.0;
+    bool finite = true;
+
+    // ---- key tags and file names
+    {
+        struct Case { const char* text; int key; bool minor; bool known; };
+        const Case cases[] = { { "Afro Vibe 102bpm Gmin", 7, true, true }, { "beat_F#m_140", 6, true, true },
+                               { "Bb major loop", 10, false, true }, { "Ebm", 3, true, true }, { "C", 0, true, false },
+                               { "Amapiano Log Drum 112bpm", -1, true, false }, { "Beat Bass Loop", -1, true, false } };
+        bool ok = true;
+        juce::String bad;
+        for (auto& c : cases)
+        {
+            int k = -1; bool m = true, known = false;
+            const bool found = oju::KeyDetector::parseKeyText (c.text, k, m, known);
+            const bool good = c.key < 0 ? ! found : (found && k == c.key && (! c.known || (known && m == c.minor)));
+            if (! good) { ok = false; bad << c.text << " -> " << (found ? oju::keyNames()[k] : juce::String ("none")) << "; "; }
+        }
+        check (ok, "key tags/file names parsed (Gmin, F#m, Bb major, Ebm, C; ignores 'Amapiano', 'Beat Bass') " + bad);
+    }
+
+    auto theBeat = beat::make (sr, 24.0);
+
+    // ---- key of a beat file: from its name, else by listening
+    {
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("oju_beats");
+        dir.createDirectory();
+        const auto untagged = dir.getChildFile ("Night Ride 100bpm.wav");
+        const auto named = dir.getChildFile ("Night Ride 100bpm Dmin.wav");
+        beat::writeWav (untagged, theBeat, sr);
+        beat::writeWav (named, theBeat, sr);
+        const auto a = oju::KeyDetector::keyFromFile (untagged);
+        const auto b = oju::KeyDetector::keyFromFile (named);
+        check (a.key >= 0 && beat::sameNotes (a.key, a.minor, 9, true), "beat file with no tag: listened, key "
+               + (a.key >= 0 ? oju::keyNames()[a.key] + (a.minor ? " minor" : " major") : juce::String ("?")) + " (A minor / C major notes)");
+        check (b.key == 2 && b.minor && b.how.contains ("file name"), "beat file named '...Dmin': D minor from the " + b.how);
+        dir.deleteRecursively();
+    }
+
+    // ---- live link: OJU Beat on the beat, OJU on the vocal - no routing
+    auto beatProc = makeProcessor (sr, 256);
+    auto vocalProc = makeProcessor (sr, 256);
+    setParam (*beatProc, oju::ids::role, 1.0f);
+    setParam (*beatProc, oju::ids::carveOn, 1.0f);
+    setParam (*beatProc, oju::ids::carveDepth, 100.0f);
+    v2::neutral (*vocalProc);
+    setParam (*vocalProc, oju::ids::tuneOn, 1.0f);
+    setParam (*vocalProc, oju::ids::tuneKeySource, 0.0f);   // Auto
+    setParam (*vocalProc, oju::ids::tuneKey, 0.0f);
+    beatProc->pumpMessageThreadWork();
+    vocalProc->pumpMessageThreadWork();
+    check (beatProc->getLatencySamples() == 0, "OJU Beat adds no latency");
+
+    auto vocal = v2::singer (sr, -16.0f, 24.0);
+    juce::AudioBuffer<float> bBuf (2, 256), vBuf (2, 256);
+    juce::MidiBuffer midi;
+    std::vector<float> dips;
+    float peak = 0.0f;
+    for (int pos = 0; pos + 256 <= theBeat.getNumSamples(); pos += 256)
+    {
+        for (int c = 0; c < 2; ++c) { bBuf.copyFrom (c, 0, theBeat, c, pos, 256); vBuf.copyFrom (c, 0, vocal, c, pos, 256); }
+        finite &= processBlockChecked (*vocalProc, vBuf, peak);
+        finite &= processBlockChecked (*beatProc, bBuf, peak);
+        if ((pos / 256) % 10 == 0)
+        {
+            beatProc->pumpMessageThreadWork();
+            vocalProc->pumpMessageThreadWork();
+            juce::Thread::sleep (1);
+        }
+    }
+    for (int k = 0; k < 20; ++k) { juce::Thread::sleep (20); beatProc->pumpMessageThreadWork(); vocalProc->pumpMessageThreadWork(); }
+
+    const auto bl = beatProc->getLinkStatus(), vl = vocalProc->getLinkStatus();
+    check (bl.key >= 0 && beat::sameNotes (bl.key, bl.minor, 9, true), "OJU Beat hears the beat's key: "
+           + (bl.key >= 0 ? oju::keyNames()[bl.key] + (bl.minor ? " minor" : " major") : juce::String ("?")) + " ("
+           + juce::String (juce::roundToInt (bl.confidence * 100.0f)) + "% sure)");
+    check (bl.peers == 1 && vl.peers == 1, "the two instances found each other (no sidechain routing)");
+    const int vk = (int) getParam (*vocalProc, oju::ids::tuneKey);
+    const bool vminor = getParam (*vocalProc, oju::ids::tuneScale) > 0.5f;
+    check (beat::sameNotes (vk, vminor, bl.key, bl.minor) && vocalProc->getKeyOrigin() == "from Beat Link",
+           "vocal Tune key set by Beat Link: " + oju::keyNames()[vk] + (vminor ? " minor" : " major"));
+
+    // ---- Carve: the beat dips only while the vocal sings
+    {
+        auto measureBand = [&] (bool vocalSinging)
+        {
+            juce::AudioBuffer<float> bb (2, 256), vb (2, 256);
+            double sum = 0.0; int count = 0;
+            auto bp = oju::makeSvf (oju::SvfType::bandpass, sr, 2500.0, 2.0);
+            oju::SvfState st;
+            for (int pos = 0; pos + 256 <= (int) (4.0 * sr); pos += 256)
+            {
+                for (int c = 0; c < 2; ++c)
+                {
+                    bb.copyFrom (c, 0, theBeat, c, pos, 256);
+                    if (vocalSinging) vb.copyFrom (c, 0, vocal, c, pos + (int) (0.2 * sr), 256); else vb.clear (c, 0, 256);
+                }
+                processBlockChecked (*vocalProc, vb, peak);
+                processBlockChecked (*beatProc, bb, peak);
+                for (int i = 0; i < 256; ++i)
+                {
+                    const float y = st.process (bp, bb.getSample (0, i));
+                    if (pos > (int) (0.5 * sr)) { sum += (double) y * y; ++count; }
+                }
+            }
+            return 10.0 * std::log10 (sum / juce::jmax (1, count) + 1.0e-20);
+        };
+        const double silentVocal = measureBand (false);
+        const double singing = measureBand (true);
+        check (silentVocal - singing > 3.0, "Carve: beat's 2.5 kHz range dips " + juce::String (silentVocal - singing, 1)
+                                            + " dB while the vocal sings, and comes back in the gaps");
+
+        setParam (*beatProc, oju::ids::carveOn, 0.0f);
+        beatProc->pumpMessageThreadWork();
+        for (int k = 0; k < 400; ++k) { juce::AudioBuffer<float> z (2, 256); z.clear(); processBlockChecked (*beatProc, z, peak); }
+        juce::AudioBuffer<float> in (2, 256), copy (2, 256);
+        bool identical = true;
+        for (int pos = 0; pos + 256 <= (int) sr; pos += 256)
+        {
+            for (int c = 0; c < 2; ++c) { in.copyFrom (c, 0, theBeat, c, pos, 256); copy.copyFrom (c, 0, theBeat, c, pos, 256); }
+            processBlockChecked (*beatProc, in, peak);
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < 256; ++i)
+                    identical &= juce::exactlyEqual (in.getSample (c, i), copy.getSample (c, i));
+        }
+        check (identical, "Carve off: OJU Beat leaves the beat bit-identical");
+    }
+
+    check (finite, "all Beat Link renders finite");
+    check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -1289,6 +1492,7 @@ int main (int argc, char** argv)
     testPhase2Modules();
     testPhase3Denoise();
     testPhase4Tune();
+    testPhase5BeatLink();
     if (juce::SystemStats::getEnvironmentVariable ("OJU_SKIP_EDITOR", {}).isEmpty())
         testEditor (outDir);
 

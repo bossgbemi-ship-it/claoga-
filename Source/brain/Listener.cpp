@@ -560,7 +560,7 @@ Features Listener::analyse (const std::vector<float>& audio, const std::vector<c
         {
             if (! det.push (audio[i]) || det.getF0() <= 0.0f)
                 continue;
-            const auto frameIdx = (size_t) juce::jmax<int64_t> (0, det.getCentreTime()) / (size_t) frameLen;
+            const auto frameIdx = (size_t) std::max<int64_t> (0, det.getCentreTime()) / (size_t) frameLen;
             if (frameIdx >= voicedMask.size() || ! voicedMask[frameIdx])
                 continue;
             const float midi = 69.0f + 12.0f * std::log2 (det.getF0() / 440.0f);
