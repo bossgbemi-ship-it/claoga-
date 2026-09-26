@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <new>
+#include <functional>
 #include "PluginProcessor.h"
 #include "ui/PluginEditor.h"
 
@@ -941,6 +942,307 @@ static void testPhase3Denoise()
     check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
 }
 
+//==============================================================================
+namespace tune
+{
+    // A sung vowel with an arbitrary pitch contour (harmonics shaped by formants)
+    juce::AudioBuffer<float> sing (double sr, double seconds, const std::function<double (double)>& midiAt, float levelDb = -14.0f)
+    {
+        juce::AudioBuffer<float> b (2, (int) (seconds * sr));
+        auto c1 = oju::makeSvf (oju::SvfType::bell, sr, 700.0, 2.0, 10.0);
+        auto c2 = oju::makeSvf (oju::SvfType::bell, sr, 1200.0, 2.0, 8.0);
+        auto c3 = oju::makeSvf (oju::SvfType::bell, sr, 2800.0, 2.5, 6.0);
+        oju::SvfState s1, s2, s3;
+        double phase = 0.0;
+        const float gain = juce::Decibels::decibelsToGain (levelDb);
+        for (int i = 0; i < b.getNumSamples(); ++i)
+        {
+            const double t = i / sr;
+            const double f0 = 440.0 * std::pow (2.0, (midiAt (t) - 69.0) / 12.0);
+            phase += f0 / sr;
+            phase -= std::floor (phase);
+            float v = 0.0f;
+            for (int h = 1; h <= 40 && f0 * h < sr * 0.45; ++h)
+                v += (float) std::sin (juce::MathConstants<double>::twoPi * phase * h) / (float) h;
+            v = s3.process (c3, s2.process (c2, s1.process (c1, v * 0.2f)));
+            const float env = (float) juce::jmin (1.0, t / 0.02) * (float) juce::jmin (1.0, (seconds - t) / 0.02);
+            b.setSample (0, i, v * gain * env);
+            b.setSample (1, i, v * gain * env);
+        }
+        return b;
+    }
+
+    struct Point { double t; float midi; float clarity; };
+
+    std::vector<Point> track (const juce::AudioBuffer<float>& b, double sr, int offset = 0)
+    {
+        oju::PitchDetector d;
+        d.prepare (sr);
+        std::vector<Point> out;
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            if (d.push (b.getSample (0, i)) && d.getF0() > 0.0f)
+                out.push_back ({ (double) (d.getCentreTime() - offset) / sr, 69.0f + 12.0f * std::log2 (d.getF0() / 440.0f), d.getProbability() });
+        return out;
+    }
+
+    float centsOff (float midi, int key, int scale)
+    {
+        float best = 1000.0f;
+        for (int n = (int) std::floor (midi) - 2; n <= (int) std::ceil (midi) + 2; ++n)
+            if (oju::Tuner::noteInScale (((n % 12) + 12) % 12, key, scale))
+                best = juce::jmin (best, std::abs (midi - (float) n) * 100.0f);
+        return best;
+    }
+
+    std::unique_ptr<oju::OjuProcessor> tuner (double sr, int key, int scale, float speed, float humanize, float amount = 100.0f)
+    {
+        auto p = makeProcessor (sr, 256);
+        v2::neutral (*p);
+        setParam (*p, oju::ids::tuneOn, 1.0f);
+        setParam (*p, oju::ids::tuneKeySource, 1.0f);   // manual
+        setParam (*p, oju::ids::tuneKey, (float) key);
+        setParam (*p, oju::ids::tuneScale, (float) scale);
+        setParam (*p, oju::ids::tuneSpeed, speed);
+        setParam (*p, oju::ids::tuneHumanize, humanize);
+        setParam (*p, oju::ids::tuneMix, amount);
+        p->pumpMessageThreadWork();
+        return p;
+    }
+
+    float spectralCentroid (const juce::AudioBuffer<float>& b, int start, int len, double sr)
+    {
+        const int order = 13, N = 1 << order;
+        juce::dsp::FFT fft (order);
+        std::vector<float> buf ((size_t) N * 2);
+        std::vector<double> mag ((size_t) N / 2 + 1, 0.0);
+        int frames = 0;
+        for (int pos = start; pos + N <= start + len; pos += N / 2, ++frames)
+        {
+            std::fill (buf.begin(), buf.end(), 0.0f);
+            for (int i = 0; i < N; ++i)
+                buf[(size_t) i] = b.getSample (0, pos + i) * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) N));
+            fft.performFrequencyOnlyForwardTransform (buf.data(), true);
+            for (int k = 0; k <= N / 2; ++k) mag[(size_t) k] += buf[(size_t) k];
+        }
+        double num = 0.0, den = 0.0;
+        for (int k = 0; k <= N / 2; ++k)
+        {
+            const double f = k * sr / N;
+            if (f < 300.0 || f > 4000.0) continue;
+            num += f * mag[(size_t) k]; den += mag[(size_t) k];
+        }
+        return (float) (num / (den + 1.0e-12));
+    }
+}
+
+static void testPhase4Tune()
+{
+    std::puts ("\nOJU 2.0 phase 4: Tune (YIN + PSOLA, formants kept)");
+    const double sr = 48000.0;
+    bool finite = true;
+    const int keyA = 9, minor = 1;
+
+    // ---- transparency at 0 % (exact PSOLA reconstruction, only delayed)
+    {
+        auto in = tune::sing (sr, 2.0, [] (double t) { return 57.3 + 0.2 * std::sin (t * 2 * 3.14159 * 5.5); });
+        auto p = tune::tuner (sr, keyA, minor, 100.0f, 0.0f, 0.0f);
+        const auto out = v2::run (*p, in, 256, finite);
+        const int L = p->getLatencySamples();
+        auto ref = makeProcessor (sr, 256); v2::neutral (*ref);
+        const auto dry = v2::run (*ref, in, 256, finite);
+        const int T = L - ref->getLatencySamples();
+        double err = 0.0, sig = 0.0;
+        for (int i = (int) (0.3 * sr); i < (int) (1.8 * sr); ++i)
+        {
+            const double d = out.getSample (0, i) - dry.getSample (0, i - T);
+            err += d * d; sig += (double) dry.getSample (0, i - T) * dry.getSample (0, i - T);
+        }
+        const float errDb = (float) (10.0 * std::log10 (err / sig + 1.0e-30));
+        check (errDb < -60.0f, "Tune at 0%: the grains rebuild the voice exactly (error " + juce::String (errDb, 1) + " dB)");
+        check (T > 0 && T < (int) (0.07 * sr), "Tune latency " + juce::String (T) + " samples (" + juce::String (T * 1000.0 / sr, 1) + " ms), reported to the host");
+        setParam (*p, oju::ids::latencyMode, 1.0f);
+        p->pumpMessageThreadWork();
+        check (p->getLatencySamples() == 0, "Track mode: Tune rests, latency 0");
+    }
+
+    // ---- sustained note 40 cents sharp, gentle vibrato: Hard snaps it in tune
+    {
+        auto in = tune::sing (sr, 3.0, [] (double t) { return 57.4 + 0.08 * std::sin (t * 2 * 3.14159 * 5.5); });
+        auto p = tune::tuner (sr, keyA, minor, 100.0f, 0.0f);
+        const auto out = v2::run (*p, in, 256, finite);
+        const int L = p->getLatencySamples();
+        double sumIn = 0, sumOut = 0; int cnt = 0;
+        for (auto& pt : tune::track (in, sr))  if (pt.t > 0.3 && pt.t < 2.7) sumIn += std::abs (pt.midi - 57.0f) * 100.0;
+        for (auto& pt : tune::track (out, sr, L)) if (pt.t > 0.3 && pt.t < 2.7) { sumOut += std::abs (pt.midi - 57.0f) * 100.0; ++cnt; }
+        const auto trIn = tune::track (in, sr);
+        const float inErr = (float) (sumIn / juce::jmax<size_t> (1, trIn.size()));
+        const float outErr = (float) (sumOut / juce::jmax (1, cnt));
+        check (outErr < 8.0f, "sustained note: " + juce::String (inErr, 0) + " cents off -> " + juce::String (outErr, 1) + " cents (Hard)");
+        check (std::abs (v2::rmsDb (out, (int) (1.0 * sr), (int) sr) - v2::rmsDb (in, (int) (1.0 * sr), (int) sr)) < 1.0f, "Tune keeps the level");
+    }
+
+    // ---- sustained notes across the range, plus a long drifting note: accurate and clean
+    {
+        struct Case { const char* name; double base; double seconds; bool drift; };
+        const Case cases[] = { { "low A2 (male)", 45.0, 3.0, false }, { "mid A3", 57.0, 3.0, false },
+                               { "high C5 (female)", 72.0, 3.0, false }, { "6 s note drifting 60 cents", 57.0, 6.0, true } };
+        for (const auto& c : cases)
+        {
+            auto in = tune::sing (sr, c.seconds, [&] (double t)
+            {
+                const double drift = c.drift ? 0.3 * std::sin (t * 2 * 3.14159 / 6.0) : 0.4;
+                return c.base + drift + 0.05 * std::sin (t * 2 * 3.14159 * 5.3);
+            });
+            auto p = tune::tuner (sr, keyA, 2, 100.0f, 0.0f);   // chromatic: nearest semitone
+            const auto out = v2::run (*p, in, 256, finite);
+            double err = 0, clar = 0; int cnt = 0;
+            for (auto& pt : tune::track (out, sr, p->getLatencySamples()))
+                if (pt.t > 0.3 && pt.t < c.seconds - 0.3) { err += tune::centsOff (pt.midi, keyA, 2); clar += pt.clarity; ++cnt; }
+            err /= juce::jmax (1, cnt); clar /= juce::jmax (1, cnt);
+            check (err < 6.0 && clar > 0.8, juce::String ("sustained ") + c.name + ": " + juce::String (err, 1) + " cents from the note, clarity "
+                                             + juce::String (clar, 2) + " (clean periodic sound)");
+        }
+    }
+
+    // ---- Natural speed glides there (tuned within a second, not instantly)
+    {
+        auto in = tune::sing (sr, 3.0, [] (double) { return 57.4; });
+        auto p = tune::tuner (sr, keyA, minor, 0.0f, 0.0f);
+        const auto out = v2::run (*p, in, 256, finite);
+        const auto tr = tune::track (out, sr, p->getLatencySamples());
+        double early = 0, late = 0; int ne = 0, nl = 0;
+        for (auto& pt : tr)
+        {
+            if (pt.t > 0.05 && pt.t < 0.12) { early += std::abs (pt.midi - 57.0f) * 100.0; ++ne; }
+            if (pt.t > 1.5 && pt.t < 2.8)  { late += std::abs (pt.midi - 57.0f) * 100.0; ++nl; }
+        }
+        early /= juce::jmax (1, ne); late /= juce::jmax (1, nl);
+        check (late < 10.0 && early > late + 5.0, "Natural speed glides in: " + juce::String (early, 0) + " cents at the start, "
+                                                   + juce::String (late, 1) + " cents after 1.5 s");
+    }
+
+    // ---- Humanize keeps vibrato while centring the note
+    {
+        auto in = tune::sing (sr, 3.0, [] (double t) { return 57.35 + 0.3 * std::sin (t * 2 * 3.14159 * 5.5); });
+        auto measure = [&] (float humanize, float& meanErr, float& depth)
+        {
+            auto p = tune::tuner (sr, keyA, minor, 100.0f, humanize);
+            const auto out = v2::run (*p, in, 256, finite);
+            std::vector<float> v;
+            for (auto& pt : tune::track (out, sr, p->getLatencySamples()))
+                if (pt.t > 0.4 && pt.t < 2.6) v.push_back (pt.midi);
+            double m = 0; for (auto x : v) m += x; m /= juce::jmax<size_t> (1, v.size());
+            double sd = 0; for (auto x : v) sd += (x - m) * (x - m); sd = std::sqrt (sd / juce::jmax<size_t> (1, v.size()));
+            meanErr = (float) std::abs (m - 57.0) * 100.0f;
+            depth = (float) sd * 100.0f;
+        };
+        float e0, d0, e1, d1;
+        measure (0.0f, e0, d0);
+        measure (100.0f, e1, d1);
+        const float inDepth = 0.3f / std::sqrt (2.0f) * 100.0f;
+        check (d1 > 0.7f * inDepth && e1 < 10.0f, "Humanize 100%: vibrato kept (" + juce::String (d1, 0) + " of " + juce::String (inDepth, 0)
+                                                   + " cents), note centred (" + juce::String (e1, 1) + " cents off)");
+        check (d0 < 0.5f * d1, "Humanize 0%: vibrato flattened (" + juce::String (d0, 0) + " cents) - the hard, robotic sound");
+    }
+
+    // ---- fast run (melisma): 90 ms notes, each randomly out of tune
+    {
+        const int notes[] = { 57, 59, 60, 62, 64, 65, 64, 62, 60, 59, 57, 55, 57, 60, 64, 62, 60, 59, 57 };
+        juce::Random rng (21);
+        std::vector<double> detune;
+        for (size_t i = 0; i < std::size (notes); ++i) detune.push_back ((rng.nextDouble() - 0.5) * 0.7);
+        const double noteLen = 0.09;
+        auto midiAt = [&] (double t)
+        {
+            const int idx = juce::jlimit (0, (int) std::size (notes) - 1, (int) (t / noteLen));
+            const int nxt = juce::jmin ((int) std::size (notes) - 1, idx + 1);
+            const double frac = t / noteLen - idx;
+            const double a = notes[idx] + detune[(size_t) idx], b = notes[nxt] + detune[(size_t) nxt];
+            return frac > 0.88 ? a + (b - a) * (frac - 0.88) / 0.12 : a;   // 10 ms glide between notes
+        };
+        auto in = tune::sing (sr, noteLen * std::size (notes) + 0.3, midiAt);
+        auto p = tune::tuner (sr, keyA, minor, 100.0f, 0.0f);
+        const auto out = v2::run (*p, in, 256, finite);
+        // judge each note on its body (the checker's own 16 ms window can't resolve the note changes)
+        auto inTune = [&] (const std::vector<tune::Point>& tr, bool all)
+        {
+            int good = 0, total = 0;
+            for (auto& pt : tr)
+            {
+                const double pos = std::fmod (pt.t, noteLen);
+                if (pt.t < 0.02 || pt.t > noteLen * std::size (notes) - 0.02) continue;
+                if (! all && (pos < 0.02 || pos > noteLen - 0.02)) continue;
+                ++total;
+                good += tune::centsOff (pt.midi, keyA, minor) < 20.0f ? 1 : 0;
+            }
+            return total > 0 ? (float) good / (float) total : 0.0f;
+        };
+        const auto trIn = tune::track (in, sr), trOut = tune::track (out, sr, p->getLatencySamples());
+        check (inTune (trOut, false) > 0.95f, "fast run (90 ms notes): note bodies in tune " + juce::String (inTune (trIn, false) * 100.0f, 0)
+                                              + "% -> " + juce::String (inTune (trOut, false) * 100.0f, 0) + "% (all frames incl. note changes: "
+                                              + juce::String (inTune (trIn, true) * 100.0f, 0) + "% -> " + juce::String (inTune (trOut, true) * 100.0f, 0) + "%)");
+    }
+
+    // ---- formants stay put (no chipmunk): shift a note by ~1.3 semitones
+    {
+        // A minor pentatonic (A C D E G): F +30 cents sits between E and G -> pulled down to E
+        auto in = tune::sing (sr, 2.5, [] (double) { return 53.3; });
+        auto p = tune::tuner (sr, keyA, 4, 100.0f, 0.0f);
+        const auto out = v2::run (*p, in, 256, finite);
+        const int L = p->getLatencySamples();
+        float outMidi = 0.0f; int cnt = 0;
+        for (auto& pt : tune::track (out, sr, L)) if (pt.t > 0.5 && pt.t < 2.2) { outMidi += pt.midi; ++cnt; }
+        outMidi /= (float) juce::jmax (1, cnt);
+        const float cIn = tune::spectralCentroid (in, (int) (0.5 * sr), (int) (1.5 * sr), sr);
+        const float cOut = tune::spectralCentroid (out, (int) (0.5 * sr) + L, (int) (1.5 * sr), sr);
+        const float resampledWouldBe = cIn * std::pow (2.0f, (outMidi - 53.3f) / 12.0f);
+        check (std::abs (outMidi - 52.0f) < 0.15f, "pentatonic snap: F+30c -> E (" + juce::String (outMidi, 2) + ")");
+        check (std::abs (cOut - cIn) / cIn < 0.05f && std::abs (resampledWouldBe - cIn) / cIn > 0.06f, "formants kept: tone centre " + juce::String (cIn, 0) + " -> " + juce::String (cOut, 0)
+                                                   + " Hz (a resampling shifter would give " + juce::String (resampledWouldBe, 0) + " Hz)");
+    }
+
+    // ---- Auto hears the key of the melody (G minor) and sets Tune
+    {
+        const int mel[] = { 55, 58, 62, 60, 58, 57, 55, 62, 63, 62, 58, 55, 50, 55, 58, 60, 62, 58, 57, 55 };
+        juce::Random rng (8);
+        std::vector<double> dt;
+        for (size_t i = 0; i < std::size (mel); ++i) dt.push_back ((rng.nextDouble() - 0.5) * 0.4);
+        auto phrase = tune::sing (sr, 0.35 * std::size (mel), [&] (double t)
+        {
+            const int i = juce::jlimit (0, (int) std::size (mel) - 1, (int) (t / 0.35));
+            return mel[i] + dt[(size_t) i] + 0.08 * std::sin (t * 2 * 3.14159 * 5.0);
+        });
+        auto p = makeProcessor (sr, 256);
+        FakeSinger dummy (sr, -60.0f); juce::ignoreUnused (dummy);
+        p->toggleListening();
+        juce::AudioBuffer<float> buf (2, 256);
+        juce::MidiBuffer midi;
+        int pos = 0;
+        for (int guard = 0; guard < 20000; ++guard)
+        {
+            for (int i = 0; i < 256; ++i)
+                for (int c = 0; c < 2; ++c)
+                    buf.setSample (c, i, phrase.getSample (c, (pos + i) % phrase.getNumSamples()));
+            pos += 256;
+            p->processBlock (buf, midi);
+            juce::Thread::sleep (1);
+            p->pumpMessageThreadWork();
+            if (p->getListenState() == oju::Listener::State::done || p->getListenState() == oju::Listener::State::failed) break;
+        }
+        for (int k = 0; k < 5; ++k) p->pumpMessageThreadWork();
+        const int key = (int) getParam (*p, oju::ids::tuneKey), scale = (int) getParam (*p, oju::ids::tuneScale);
+        bool sameNotes = true;
+        for (int pc = 0; pc < 12; ++pc)
+            sameNotes &= oju::Tuner::noteInScale (pc, key, scale) == oju::Tuner::noteInScale (pc, 7, 1);
+        check (getParam (*p, oju::ids::tuneOn) > 0.5f && sameNotes,
+               "Auto heard the melody's key: " + oju::keyNames()[key] + " " + oju::scaleNames()[scale].toLowerCase() + " (sung in G minor)");
+        printRead (*p);
+    }
+
+    check (finite, "all Tune renders finite");
+    check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -986,6 +1288,7 @@ int main (int argc, char** argv)
     testPhase1Modules();
     testPhase2Modules();
     testPhase3Denoise();
+    testPhase4Tune();
     if (juce::SystemStats::getEnvironmentVariable ("OJU_SKIP_EDITOR", {}).isEmpty())
         testEditor (outDir);
 

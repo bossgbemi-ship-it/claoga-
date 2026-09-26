@@ -21,6 +21,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     plosive.prepare (fs, maxBlock, channels);
     limiter.prepare (fs, maxBlock);
     denoiser.prepare (fs, maxBlock);
+    tuner.prepare (fs, maxBlock);
     breath.prepare (fs);
     doubler.prepare (fs, maxBlock);
 
@@ -38,6 +39,7 @@ void Engine::reset()
     plosive.reset();
     limiter.reset();
     denoiser.reset();
+    tuner.reset();
     rawDelay.clear();
     breath.reset();
     doubler.reset();
@@ -47,7 +49,7 @@ int Engine::preLatencyFor (const EngineSettings& s) const noexcept
 {
     if (s.chain.trackMode)
         return 0;   // Track mode: lookahead modules rest
-    return s.denoiseOn ? denoiser.latencySamples() : 0;
+    return (s.denoiseOn ? denoiser.latencySamples() : 0) + (s.tuneOn ? tuner.latencySamples() : 0);
 }
 
 int Engine::latencyFor (const EngineSettings& s) const noexcept
@@ -82,7 +84,8 @@ void Engine::process (juce::AudioBuffer<float>& buffer, const EngineSettings& s)
 void Engine::processChunk (float* const* ch, int nch, int n, const EngineSettings& s) noexcept
 {
     const bool denoiseActive = s.denoiseOn && ! s.chain.trackMode;
-    const bool pre = s.plosiveOn || denoiseActive;
+    const bool tuneActive = s.tuneOn && ! s.chain.trackMode;
+    const bool pre = s.plosiveOn || denoiseActive || tuneActive;
     const int preLatency = preLatencyFor (s);
 
     // Start modules from a clean state when they are switched on.
@@ -90,6 +93,8 @@ void Engine::processChunk (float* const* ch, int nch, int n, const EngineSetting
     if (s.limiterOn && ! lastLimiter) limiter.reset();
     if (denoiseActive && ! lastDenoise) denoiser.reset();
     lastDenoise = denoiseActive;
+    if (tuneActive && ! lastTune) tuner.reset();
+    lastTune = tuneActive;
     if (s.breathOn && ! lastBreath) breath.reset();
     if (s.doubleOn && ! lastDouble) doubler.reset();
     lastPlosive = s.plosiveOn;
@@ -122,6 +127,9 @@ void Engine::processChunk (float* const* ch, int nch, int n, const EngineSetting
 
     if (s.plosiveOn)
         storeMax (plosiveDb, plosive.process (ch, nch, n, s.plosiveAmount));
+
+    if (tuneActive)
+        tuner.process (ch, nch, n, s.tune);
 
     // ---- the v1 chain (with its 2.0 insertions)
     juce::AudioBuffer<float> view (const_cast<float**> (ch), nch, n);

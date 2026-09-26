@@ -33,6 +33,11 @@ struct Features
     float airDb = 0.0f;
 
     std::array<float, spectrumPoints> spectrumDb {};
+
+    // OJU 2.0: the key of the sung melody (pitch-class histogram vs key profiles)
+    int   keyRoot = -1;          // 0 = C .. 11 = B, -1 unknown
+    bool  keyMinor = true;
+    float keyConfidence = 0.0f;  // 0..1
 };
 
 } // namespace oju

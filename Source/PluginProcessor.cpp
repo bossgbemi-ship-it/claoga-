@@ -158,6 +158,12 @@ EngineSettings OjuProcessor::readEngineSettings() const noexcept
     e.denoiseOn = pDenoiseOn.get() > 0.5f;
     e.denoiseAmount = pDenoiseAmt.get() * 0.01f;
     e.roomAmount = pRoomAmt.get() * 0.01f;
+    e.tuneOn = pTuneOn.get() > 0.5f;
+    e.tune.key = juce::jlimit (0, 11, (int) std::lround (pTuneKey.get()));
+    e.tune.scale = juce::jlimit (0, 5, (int) std::lround (pTuneScale.get()));
+    e.tune.speed = pTuneSpeed.get() * 0.01f;
+    e.tune.humanize = pTuneHumanize.get() * 0.01f;
+    e.tune.amount = pTuneMix.get() * 0.01f;
     e.plosiveOn = pPlosiveOn.get() > 0.5f;
     e.plosiveAmount = pPlosiveAmt.get() * 0.01f;
     e.limiterOn = pLimiterOn.get() > 0.5f;
@@ -244,8 +250,16 @@ void OjuProcessor::applyBrain (const Features& f, bool rewriteRead)
         return;
 
     const auto result = decide (f, (int) std::lround (pStyle.get()), (int) std::lround (pMode.get()), hostBpm.load());
+    const bool manualKey = pTuneKeySource.get() > 0.5f;
     for (const auto& [id, value] : result.values)
+    {
+        if (manualKey && (id == ids::tuneKey || id == ids::tuneScale))
+            continue;   // the artist set the key by hand: never overwrite it
         setParam (id, value);
+    }
+
+    if (! manualKey && f.keyRoot >= 0 && f.keyConfidence > 0.35f)
+        keyOrigin = "from your melody";
 
     if (rewriteRead)
     {
@@ -409,6 +423,9 @@ juce::ValueTree OjuProcessor::featuresToTree (const Features& f)
     t.setProperty ("sibilanceFreq", f.sibilanceFreq, nullptr);
     t.setProperty ("sibilanceDb", f.sibilanceDb, nullptr);
     t.setProperty ("airDb", f.airDb, nullptr);
+    t.setProperty ("keyRoot", f.keyRoot, nullptr);
+    t.setProperty ("keyMinor", f.keyMinor, nullptr);
+    t.setProperty ("keyConfidence", f.keyConfidence, nullptr);
 
     juce::StringArray spec;
     for (auto v : f.spectrumDb)
@@ -446,6 +463,9 @@ Features OjuProcessor::treeToFeatures (const juce::ValueTree& t)
     f.sibilanceFreq = get ("sibilanceFreq", f.sibilanceFreq);
     f.sibilanceDb = get ("sibilanceDb", f.sibilanceDb);
     f.airDb = get ("airDb", f.airDb);
+    f.keyRoot = (int) t.getProperty ("keyRoot", -1);
+    f.keyMinor = (bool) t.getProperty ("keyMinor", true);
+    f.keyConfidence = get ("keyConfidence", 0.0f);
 
     juce::StringArray spec;
     spec.addTokens (t.getProperty ("spectrum").toString(), " ", {});
@@ -501,6 +521,7 @@ void OjuProcessor::refreshExtraCache()
         extra.appendChild (room, nullptr);
     }
 
+    extra.setProperty ("keyOrigin", keyOrigin, nullptr);
     extra.setProperty (activeAttr, activeSlot, nullptr);
     for (int i = 0; i < 2; ++i)
     {
@@ -584,6 +605,7 @@ void OjuProcessor::applyPendingExtra()
         engine.getDenoiser().setProfile (roomProfile, roomProfileValid);
     }
 
+    keyOrigin = extra.getProperty ("keyOrigin").toString();
     activeSlot = juce::jlimit (0, 1, (int) extra.getProperty (activeAttr, 0));
     slots[0] = {};
     slots[1] = {};

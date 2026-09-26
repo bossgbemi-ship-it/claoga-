@@ -6,6 +6,7 @@
 #include "modules/BreathControl.h"
 #include "modules/Doubler.h"
 #include "modules/Denoiser.h"
+#include "modules/Tuner.h"
 
 namespace oju
 {
@@ -16,6 +17,7 @@ struct EngineSettings
 
     bool  denoiseOn = false;  float denoiseAmount = 0.6f, roomAmount = 0.5f;
     bool  plosiveOn = false;  float plosiveAmount = 0.5f;
+    bool  tuneOn = false;     Tuner::Params tune;
     bool  limiterOn = false;  float limiterCeilingDb = -1.0f;
     bool  breathOn = false;   float breathAmount = 0.5f;
     bool  doubleOn = false;   float doubleAmount = 0.35f, width = 0.6f;  bool hookOnly = false;
@@ -41,6 +43,7 @@ public:
 
     VocalChain& getChain() noexcept { return chain; }
     Denoiser& getDenoiser() noexcept { return denoiser; }
+    Tuner& getTuner() noexcept { return tuner; }
 
     std::atomic<float> plosiveDb { 0.0f }, limiterGrDb { 0.0f }, breathDb { 0.0f }, doubleEngaged { 0.0f };
     int getBreathCount() const noexcept { return breath.getBreathCount(); }
@@ -57,6 +60,7 @@ private:
     VocalChain chain;
     Denoiser denoiser;
     PlosiveTamer plosive;
+    Tuner tuner;
     Limiter limiter;
     BreathControl breath;
     Doubler doubler;
@@ -67,7 +71,7 @@ private:
 
     juce::AudioBuffer<float> chunkBuffer, rawCopy, rawDelay;
     int rawWrite = 0;
-    bool lastPlosive = false, lastLimiter = false, lastBreath = false, lastDouble = false, lastDenoise = false;
+    bool lastPlosive = false, lastLimiter = false, lastBreath = false, lastDouble = false, lastDenoise = false, lastTune = false;
 };
 
 } // namespace oju

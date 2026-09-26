@@ -76,6 +76,8 @@ public:
     bool isLearningRoom() noexcept          { return engine.getDenoiser().isLearning(); }
     float getRoomLearnProgress() noexcept   { return engine.getDenoiser().learnProgress(); }
     bool hasRoomProfile() const noexcept    { return roomProfileValid; }
+    const juce::String& getKeyOrigin() const noexcept { return keyOrigin; }
+    void setKeyOrigin (const juce::String& s) { keyOrigin = s; }
 
     float getCpuLoad() const noexcept { return cpuLoad.load (std::memory_order_relaxed); }
     static juce::File presetsDirectory();
@@ -140,6 +142,7 @@ private:
     std::atomic<int> loadedStyle { -1 }, loadedMode { -1 };
 
     std::array<float, Denoiser::profileBands> roomProfile {};
+    juce::String keyOrigin;
     bool roomProfileValid = false;
 
     juce::CriticalSection pendingLock, extraCacheLock;

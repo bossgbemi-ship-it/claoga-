@@ -67,6 +67,7 @@ set(OJU_SOURCES
     Source/dsp/VocalChain.cpp
     Source/dsp/Engine.cpp
     Source/dsp/modules/Denoiser.cpp
+    Source/dsp/modules/Tuner.cpp
     Source/brain/Listener.cpp
     Source/brain/Brain.cpp
     Source/ui/Theme.cpp

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <vector>
 #include "Features.h"
+#include "../dsp/modules/PitchDetector.h"
 
 namespace oju
 {
@@ -40,6 +41,10 @@ public:
     // Pure analysis entry point (also used by the tests).
     static Features analyse (const std::vector<float>& audio, const std::vector<char>& voicedFrames,
                              int frameLength, double sampleRate, int mode);
+
+    // OJU 2.0: key from a 12-bin pitch-class histogram (Krumhansl-Kessler profiles).
+    // Also used by OJU Beat (chroma). Returns root (0..11) and sets minor/confidence.
+    static int estimateKey (const std::array<double, 12>& histogram, bool& minor, float& confidence);
 
     static constexpr double naturalSeconds = 10.0, extremeSeconds = 10.0;   // OJU 2.0: Auto listens for 10 s
 

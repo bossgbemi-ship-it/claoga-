@@ -279,6 +279,20 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
 
     set (ids::tuneSpeed, extreme ? juce::jmin (100.0f, p2.tuneSpeed + 20.0f) : p2.tuneSpeed);
     set (ids::tuneHumanize, extreme ? juce::jmax (0.0f, p2.humanize - 20.0f) : p2.humanize);
+    set (ids::tuneMix, extreme ? 100.0f : 80.0f);
+    if (f.keyRoot >= 0 && f.keyConfidence > 0.35f)
+    {
+        set (ids::tuneOn, 1.0f);
+        set (ids::tuneKey, (float) f.keyRoot);
+        set (ids::tuneScale, f.keyMinor ? 1.0f : 0.0f);
+        lines.push_back ({ 4.5f, "Your melody sits in " + keyNames()[f.keyRoot] + (f.keyMinor ? " minor" : " major")
+                                 + dash() + "Tune on, " + (extreme ? "tight" : "gentle") + " retune" });
+    }
+    else
+    {
+        set (ids::tuneOn, 0.0f);
+        lines.push_back ({ 3.2f, "No clear key in the take" + dash() + "Tune left off (link the beat or set the key)" });
+    }
 
     // ---- Keep the 6 most important lines, in a natural reading order
     std::vector<size_t> order (lines.size());

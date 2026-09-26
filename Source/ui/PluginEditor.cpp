@@ -392,7 +392,8 @@ juce::String OjuEditor::tileStatus (int id) const
         case mCleanup:  return "HPF " + text (ids::lowCutFreq) + (val (ids::plosiveOn) > 0.5f ? dot() + "pops tamed" : juce::String());
         case mTune:
             if (track) return "Rests in Track mode";
-            return keyNames()[(int) val (ids::tuneKey)] + " " + scaleNames()[(int) val (ids::tuneScale)].toLowerCase();
+            return keyNames()[(int) val (ids::tuneKey)] + " " + scaleNames()[(int) val (ids::tuneScale)].toLowerCase()
+                   + dot() + "formants kept";
         case mEq:       return "Presence " + text (ids::presenceGain);
         case mDeess:
         {
@@ -625,9 +626,28 @@ void OjuEditor::timerCallback()
         cleanupInfo->set (f.valid ? "Lowest notes around " + hzText (f.lowestVoiceHz) : juce::String ("Press Auto to set the high-pass by voice"));
     }
     if (tuneInfo != nullptr)
-        tuneInfo->set (track ? juce::String ("Tune rests in Track mode (it needs lookahead)")
-                             : keyNames()[(int) ojuProcessor.getParameterValue (ids::tuneKey)] + " "
-                               + scaleNames()[(int) ojuProcessor.getParameterValue (ids::tuneScale)].toLowerCase());
+    {
+        juce::String t;
+        if (track)
+            t = "Tune rests in Track mode (it needs lookahead)";
+        else
+        {
+            const bool manual = ojuProcessor.getParameterValue (ids::tuneKeySource) > 0.5f;
+            t = keyNames()[(int) ojuProcessor.getParameterValue (ids::tuneKey)] + " "
+                + scaleNames()[(int) ojuProcessor.getParameterValue (ids::tuneScale)].toLowerCase()
+                + (manual ? juce::String (" (set by hand)")
+                          : (ojuProcessor.getKeyOrigin().isNotEmpty() ? " (" + ojuProcessor.getKeyOrigin() + ")" : juce::String()));
+            auto& tuner = ojuProcessor.getEngine().getTuner();
+            const float sung = tuner.detectedMidi.load(), target = tuner.targetMidi.load();
+            if (ojuProcessor.getParameterValue (ids::tuneOn) > 0.5f && sung > 0.0f)
+            {
+                auto noteName = [] (float m) { const int n = (int) std::lround (m); return keyNames()[((n % 12) + 12) % 12] + juce::String (n / 12 - 1); };
+                const int cents = juce::roundToInt ((sung - std::round (sung)) * 100.0f);
+                t << "\nSinging " << noteName (sung) << (cents >= 0 ? " +" : " ") << cents << "c  ->  " << noteName (target);
+            }
+        }
+        tuneInfo->set (t);
+    }
     if (deessInfo != nullptr)
     {
         const bool autoBand = ojuProcessor.getParameterValue (ids::deessAuto) > 0.5f;

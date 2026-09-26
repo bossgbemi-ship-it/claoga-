@@ -291,6 +291,42 @@ void Listener::run()
 }
 
 //==============================================================================
+int Listener::estimateKey (const std::array<double, 12>& h, bool& minor, float& confidence)
+{
+    static const double major[12] = { 6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88 };
+    static const double minorP[12] = { 6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17 };
+
+    auto correlate = [&h] (const double* profile, int root)
+    {
+        double mx = 0, my = 0;
+        for (int i = 0; i < 12; ++i) { mx += h[(size_t) i]; my += profile[i]; }
+        mx /= 12; my /= 12;
+        double sxy = 0, sxx = 0, syy = 0;
+        for (int i = 0; i < 12; ++i)
+        {
+            const double x = h[(size_t) ((i + root) % 12)] - mx, y = profile[i] - my;
+            sxy += x * y; sxx += x * x; syy += y * y;
+        }
+        return sxx > 0 && syy > 0 ? sxy / std::sqrt (sxx * syy) : 0.0;
+    };
+
+    double best = -2, second = -2;
+    int bestRoot = -1;
+    bool bestMinor = true;
+    for (int root = 0; root < 12; ++root)
+        for (int m = 0; m < 2; ++m)
+        {
+            const double r = correlate (m ? minorP : major, root);
+            if (r > best) { second = best; best = r; bestRoot = root; bestMinor = m == 1; }
+            else if (r > second) second = r;
+        }
+    minor = bestMinor;
+    // confidence: how well it fits, and how clearly it beats the runner-up
+    confidence = (float) juce::jlimit (0.0, 1.0, (best - 0.3) / 0.5) * (float) juce::jlimit (0.0, 1.0, (best - second) * 8.0 + 0.3);
+    return bestRoot;
+}
+
+//==============================================================================
 Features Listener::analyse (const std::vector<float>& audio, const std::vector<char>& voicedMask,
                             int frameLen, double sr, int mode)
 {
@@ -512,6 +548,39 @@ Features Listener::analyse (const std::vector<float>& audio, const std::vector<c
     {
         const double fr = 20.0 * std::pow (1000.0, (double) i / (Features::spectrumPoints - 1));
         f.spectrumDb[(size_t) i] = fr < nyquist ? spec.valueAt (S, fr) : -60.0f;
+    }
+
+    // ---- OJU 2.0: which key is the melody in? Stable sung notes vote for their pitch class.
+    {
+        PitchDetector det;
+        det.prepare (sr);
+        std::array<double, 12> hist {};
+        float prevMidi = -1.0f;
+        for (size_t i = 0; i < audio.size(); ++i)
+        {
+            if (! det.push (audio[i]) || det.getF0() <= 0.0f)
+                continue;
+            const auto frameIdx = (size_t) juce::jmax<int64_t> (0, det.getCentreTime()) / (size_t) frameLen;
+            if (frameIdx >= voicedMask.size() || ! voicedMask[frameIdx])
+                continue;
+            const float midi = 69.0f + 12.0f * std::log2 (det.getF0() / 440.0f);
+            if (prevMidi > 0.0f && std::abs (midi - prevMidi) < 0.3f)   // a held note, not a slide
+            {
+                const int pc = ((int) std::lround (midi) % 12 + 12) % 12;
+                hist[(size_t) pc] += det.getProbability();
+            }
+            prevMidi = midi;
+        }
+        double total = 0.0;
+        for (auto v : hist) total += v;
+        if (total > 40.0)   // at least ~0.2 s of held notes
+        {
+            bool minor = true;
+            float conf = 0.0f;
+            f.keyRoot = estimateKey (hist, minor, conf);
+            f.keyMinor = minor;
+            f.keyConfidence = conf;
+        }
     }
 
     f.valid = true;
