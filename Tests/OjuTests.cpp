@@ -452,17 +452,27 @@ int main (int argc, char** argv)
     // --write-vocal <file.wav> <seconds>: render the synthetic singer, for live-input testing
     if (argc > 3 && juce::String (argv[1]) == "--write-vocal")
     {
-        const double sr = 48000.0;
+        const double sr = argc > 4 ? juce::String (argv[4]).getDoubleValue() : 48000.0;
+        const int chans = argc > 5 ? juce::jlimit (1, 2, juce::String (argv[5]).getIntValue()) : 1;
         FakeSinger singer (sr, -16.0f);
         const int n = (int) (juce::String (argv[3]).getDoubleValue() * sr);
-        juce::AudioBuffer<float> b (1, n);
+        juce::AudioBuffer<float> b (chans, n);
+        float r = 0.0f;
         for (int i = 0; i < n; ++i)
-            b.setSample (0, i, singer.next());
+        {
+            const float s = singer.next();
+            b.setSample (0, i, s);
+            if (chans > 1)
+            {
+                r = 0.7f * r + 0.3f * s;   // a slightly different, filtered right channel
+                b.setSample (1, i, r * 0.9f);
+            }
+        }
         const juce::File f { juce::String (argv[2]) };
         f.deleteFile();
         std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (f);
         juce::WavAudioFormat wav;
-        auto writer = wav.createWriterFor (os, juce::AudioFormatWriterOptions{}.withSampleRate (sr).withNumChannels (1).withBitsPerSample (24));
+        auto writer = wav.createWriterFor (os, juce::AudioFormatWriterOptions{}.withSampleRate (sr).withNumChannels (chans).withBitsPerSample (24));
         if (writer != nullptr && writer->writeFromAudioSampleBuffer (b, 0, n))
             return 0;
         return 1;

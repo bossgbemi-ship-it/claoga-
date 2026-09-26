@@ -18,6 +18,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(OJU_BUILD_TESTS "Build the headless OJU test runner" OFF)
+set(OJU_V1_SOURCE_DIR "" CACHE PATH "Checkout of OJU v1 (for the v1/v2 null test renderer)")
 
 # ---- JUCE (pinned) ----------------------------------------------------------
 # To build offline, pass -DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE
@@ -115,4 +116,25 @@ if(OJU_BUILD_TESTS)
             ${OJU_MODULES}
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
+endif()
+
+# ---- Offline renderers for the v1 <-> v2 null test ---------------------------
+if(OJU_BUILD_TESTS)
+    juce_add_console_app(OJURender PRODUCT_NAME "OJURender")
+    target_sources(OJURender PRIVATE Tests/Render.cpp ${OJU_SOURCES})
+    target_include_directories(OJURender PRIVATE Source)
+    target_compile_definitions(OJURender PRIVATE ${OJU_DEFINITIONS} JUCE_MODAL_LOOPS_PERMITTED=1)
+    target_link_libraries(OJURender PRIVATE ${OJU_MODULES} ${OJU_EXTRA_LIBS}
+        juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+    if(OJU_V1_SOURCE_DIR)
+        # Frozen v1 sources, compiled with exactly the same flags as v2.
+        file(GLOB_RECURSE OJU_V1_SOURCES CONFIGURE_DEPENDS "${OJU_V1_SOURCE_DIR}/Source/*.cpp")
+        juce_add_console_app(OJURenderV1 PRODUCT_NAME "OJURenderV1")
+        target_sources(OJURenderV1 PRIVATE Tests/Render.cpp ${OJU_V1_SOURCES})
+        target_include_directories(OJURenderV1 PRIVATE "${OJU_V1_SOURCE_DIR}/Source")
+        target_compile_definitions(OJURenderV1 PRIVATE ${OJU_DEFINITIONS} JUCE_MODAL_LOOPS_PERMITTED=1)
+        target_link_libraries(OJURenderV1 PRIVATE ${OJU_MODULES}
+            juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+    endif()
 endif()
