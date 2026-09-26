@@ -159,6 +159,12 @@ EngineSettings OjuProcessor::readEngineSettings() const noexcept
     e.plosiveAmount = pPlosiveAmt.get() * 0.01f;
     e.limiterOn = pLimiterOn.get() > 0.5f;
     e.limiterCeilingDb = pLimiterCeiling.get();
+    e.breathOn = pBreathOn.get() > 0.5f;
+    e.breathAmount = pBreathAmt.get() * 0.01f;
+    e.doubleOn = pDoubleOn.get() > 0.5f;
+    e.doubleAmount = pDoubleAmt.get() * 0.01f;
+    e.width = pWidth.get() * 0.01f;
+    e.hookOnly = pHookOnly.get() > 0.5f;
     return e;
 }
 

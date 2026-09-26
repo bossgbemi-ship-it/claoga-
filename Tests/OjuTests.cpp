@@ -713,6 +713,120 @@ static void testPhase1Modules()
     check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
 }
 
+static void testPhase2Modules()
+{
+    std::puts ("\nOJU 2.0 phase 2: Compress (leveler), Breath control, Double + Width");
+    const double sr = 48000.0;
+    bool finite = true;
+
+    // ---- Leveler: evens a quiet verse and a loud hook before the v1 Press
+    {
+        auto quiet = v2::singer (sr, -30.0f, 6.0), loud = v2::singer (sr, -12.0f, 6.0);
+        juce::AudioBuffer<float> in (2, quiet.getNumSamples() + loud.getNumSamples());
+        for (int c = 0; c < 2; ++c) { in.copyFrom (c, 0, quiet, c, 0, quiet.getNumSamples()); in.copyFrom (c, quiet.getNumSamples(), loud, c, 0, loud.getNumSamples()); }
+        auto spread = [&] (bool on)
+        {
+            auto p = makeProcessor (sr, 256); v2::neutral (*p);
+            setParam (*p, oju::ids::levelOn, on ? 1.0f : 0.0f);
+            setParam (*p, oju::ids::levelAmount, 100.0f);
+            p->pumpMessageThreadWork();
+            const auto out = v2::run (*p, in, 256, finite);
+            const int half = quiet.getNumSamples();
+            return v2::rmsDb (out, half + (int) (3 * sr), (int) (2.5 * sr)) - v2::rmsDb (out, (int) (3 * sr), (int) (2.5 * sr));
+        };
+        const float off = spread (false), on = spread (true);
+        check (on < off - 3.0f, "leveler (auto threshold) evens verse/hook: " + juce::String (off, 1) + " dB -> " + juce::String (on, 1) + " dB");
+    }
+
+    // ---- Breath control: breaths in the gaps go down, the singing doesn't
+    {
+        auto in = v2::singer (sr, -14.0f, 6.0);
+        juce::Random rng (5);
+        auto bp = oju::makeSvf (oju::SvfType::bandpass, sr, 1800.0, 0.8);
+        oju::SvfState st;
+        // the fake singer breathes 2.45-2.95 s and 5.45-5.95 s (between phrases)
+        for (double t0 : { 2.45, 5.45 })
+            for (int i = 0; i < (int) (0.5 * sr); ++i)
+            {
+                const float env = std::sin (juce::MathConstants<float>::pi * (float) i / (float) (0.5 * sr));
+                const float b = st.process (bp, rng.nextFloat() * 2.0f - 1.0f) * 0.06f * env;
+                const int idx = (int) (t0 * sr) + i;
+                for (int c = 0; c < 2; ++c) in.setSample (c, idx, in.getSample (c, idx) + b);
+            }
+        auto render = [&] (bool on)
+        {
+            auto p = makeProcessor (sr, 256); v2::neutral (*p);
+            setParam (*p, oju::ids::breathOn, on ? 1.0f : 0.0f);
+            setParam (*p, oju::ids::breathAmount, 100.0f);
+            p->pumpMessageThreadWork();
+            return v2::run (*p, in, 256, finite);
+        };
+        const auto a = render (false), b = render (true);
+        const int br = (int) (2.6 * sr), brLen = (int) (0.25 * sr);
+        const float breathDrop = v2::rmsDb (a, br, brLen) - v2::rmsDb (b, br, brLen);
+        const float sungDrop = v2::rmsDb (a, (int) (0.3 * sr), (int) (2.0 * sr)) - v2::rmsDb (b, (int) (0.3 * sr), (int) (2.0 * sr));
+        // sustained note tail: the last 150 ms of the phrase must survive
+        const float tailDrop = v2::rmsDb (a, (int) (2.22 * sr), (int) (0.15 * sr)) - v2::rmsDb (b, (int) (2.22 * sr), (int) (0.15 * sr));
+        check (breathDrop > 8.0f, "breaths turned down " + juce::String (breathDrop, 1) + " dB (not removed)");
+        check (breathDrop < 19.0f, "breaths kept, not deleted (max 18 dB)");
+        check (sungDrop < 0.5f, "singing untouched (" + juce::String (sungDrop, 2) + " dB)");
+        check (tailDrop < 1.0f, "note tails untouched (" + juce::String (tailDrop, 2) + " dB)");
+    }
+
+    // ---- Double + Width: a mono vocal becomes a wide stereo double
+    {
+        auto in = v2::singer (sr, -16.0f, 4.0);
+        auto sideToMid = [&] (const juce::AudioBuffer<float>& o, int start, int len)
+        {
+            double m = 0.0, sd = 0.0;
+            for (int i = start; i < start + len; ++i)
+            {
+                const double l = o.getSample (0, i), r = o.getSample (1, i);
+                m += (l + r) * (l + r); sd += (l - r) * (l - r);
+            }
+            return (float) (10.0 * std::log10 ((sd + 1.0e-20) / (m + 1.0e-20)));
+        };
+        auto p = makeProcessor (sr, 256); v2::neutral (*p);
+        setParam (*p, oju::ids::doubleOn, 1.0f);
+        setParam (*p, oju::ids::doubleAmount, 50.0f);
+        setParam (*p, oju::ids::width, 60.0f);
+        p->pumpMessageThreadWork();
+        const auto out = v2::run (*p, in, 256, finite);
+        const float sm = sideToMid (out, (int) (0.5 * sr), (int) (1.5 * sr));
+        check (sm > -20.0f, "double makes a mono vocal stereo (side/mid " + juce::String (sm, 1) + " dB)");
+    }
+
+    // ---- Hook only: the double comes in on the loud section, not the quiet verse
+    {
+        auto quiet = v2::singer (sr, -28.0f, 8.0), loud = v2::singer (sr, -14.0f, 8.0);
+        juce::AudioBuffer<float> in (2, quiet.getNumSamples() + loud.getNumSamples());
+        for (int c = 0; c < 2; ++c) { in.copyFrom (c, 0, quiet, c, 0, quiet.getNumSamples()); in.copyFrom (c, quiet.getNumSamples(), loud, c, 0, loud.getNumSamples()); }
+        auto p = makeProcessor (sr, 256); v2::neutral (*p);
+        setParam (*p, oju::ids::doubleOn, 1.0f);
+        setParam (*p, oju::ids::doubleAmount, 60.0f);
+        setParam (*p, oju::ids::hookOnly, 1.0f);
+        p->pumpMessageThreadWork();
+        const auto out = v2::run (*p, in, 256, finite);
+        auto sideDb = [&] (int start, int len)
+        {
+            double sd = 0.0, m = 0.0;
+            for (int i = start; i < start + len; ++i)
+            {
+                const double l = out.getSample (0, i), r = out.getSample (1, i);
+                sd += (l - r) * (l - r); m += (l + r) * (l + r);
+            }
+            return (float) (10.0 * std::log10 ((sd + 1.0e-20) / (m + 1.0e-20)));
+        };
+        const float verse = sideDb ((int) (5 * sr), (int) (2 * sr));
+        const float hook = sideDb (quiet.getNumSamples() + (int) (2 * sr), (int) (3 * sr));
+        check (hook > verse + 10.0f, "hook only: double in the hook (" + juce::String (hook, 1) + " dB side) not the verse ("
+                                     + juce::String (verse, 1) + " dB)");
+    }
+
+    check (finite, "all phase 2 renders finite");
+    check (audioThreadAllocations.load() == 0, "no heap allocation inside processBlock");
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
@@ -756,6 +870,7 @@ int main (int argc, char** argv)
     testStateRoundTrip();
     testMono();
     testPhase1Modules();
+    testPhase2Modules();
     if (juce::SystemStats::getEnvironmentVariable ("OJU_SKIP_EDITOR", {}).isEmpty())
         testEditor (outDir);
 

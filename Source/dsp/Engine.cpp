@@ -20,6 +20,8 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     chain.prepare (sampleRate, maxBlockSize, numChannels);
     plosive.prepare (fs, maxBlock, channels);
     limiter.prepare (fs, maxBlock);
+    breath.prepare (fs);
+    doubler.prepare (fs, maxBlock);
 
     chunkBuffer.setSize (VocalChain::maxChannels, maxBlock);
     rawCopy.setSize (VocalChain::maxChannels, maxBlock);
@@ -31,6 +33,8 @@ void Engine::reset()
     chain.reset();
     plosive.reset();
     limiter.reset();
+    breath.reset();
+    doubler.reset();
 }
 
 int Engine::latencyFor (const EngineSettings& s) const noexcept
@@ -69,8 +73,12 @@ void Engine::processChunk (float* const* ch, int nch, int n, const EngineSetting
     // Start modules from a clean state when they are switched on.
     if (s.plosiveOn && ! lastPlosive) plosive.reset();
     if (s.limiterOn && ! lastLimiter) limiter.reset();
+    if (s.breathOn && ! lastBreath) breath.reset();
+    if (s.doubleOn && ! lastDouble) doubler.reset();
     lastPlosive = s.plosiveOn;
     lastLimiter = s.limiterOn;
+    lastBreath = s.breathOn;
+    lastDouble = s.doubleOn;
 
     // Keep the untouched input for the chain's dry (Amount) and bypass paths.
     if (pre)
@@ -84,11 +92,24 @@ void Engine::processChunk (float* const* ch, int nch, int n, const EngineSetting
     // ---- the v1 chain (with its 2.0 insertions)
     juce::AudioBuffer<float> view (const_cast<float**> (ch), nch, n);
     const float* raws[VocalChain::maxChannels] = { rawCopy.getReadPointer (0), rawCopy.getReadPointer (1) };
-    chain.process (view, s.chain, pre ? raws : nullptr, nullptr);
+    current = &s;
+    const bool post = s.breathOn || s.doubleOn;
+    chain.process (view, s.chain, pre ? raws : nullptr, post ? this : nullptr);
 
     // ---- modules after the chain
     if (s.limiterOn)
         storeMax (limiterGrDb, limiter.process (ch, nch, n, s.limiterCeilingDb, s.chain.trackMode, s.chain.bypass));
+}
+
+void Engine::process (float* const* ch, int nch, int n) noexcept
+{
+    if (current == nullptr)
+        return;
+    const auto& s = *current;
+    if (s.breathOn)
+        storeMax (breathDb, breath.process (ch, nch, n, s.breathAmount));
+    if (s.doubleOn)
+        doubleEngaged.store (doubler.process (ch, nch, n, s.doubleAmount, s.width, s.hookOnly), std::memory_order_relaxed);
 }
 
 } // namespace oju
