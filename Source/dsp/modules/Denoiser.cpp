@@ -296,7 +296,7 @@ void Denoiser::processFrame (int nch, float amount, float room, bool extreme) no
                 if (binHz[(size_t) k] >= lo && binHz[(size_t) k] <= hi) { sum += learnAccum[(size_t) k]; ++cnt; }
             if (cnt == 0)
             {
-                const int k = juce::jlimit (1, bins - 1, (int) std::round (fc * fftSize / fs));
+                const int k = juce::jlimit (1, bins - 1, (int) std::round ((double) fc * fftSize / fs));
                 sum = learnAccum[(size_t) k]; cnt = 1;
             }
             learnedOut[(size_t) b] = (float) (10.0 * std::log10 (sum / cnt / learnFrames + 1.0e-20));

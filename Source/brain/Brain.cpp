@@ -251,6 +251,25 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
 
     //--------------------------------------------------------------------------
     // OJU 2.0: Auto now sets all 12 modules
+
+    // Denoise: how far the room sits under the voice
+    {
+        const float snr = f.rmsP50 - f.noiseFloorDb;
+        if (f.noiseFloorDb > -75.0f && snr < 50.0f)
+        {
+            const float amount = juce::jlimit (30.0f, 90.0f, (50.0f - snr) * 2.5f + 30.0f + (extreme ? 15.0f : 0.0f));
+            set (ids::denoiseOn, 1.0f);
+            set (ids::denoiseAmount, roundTo (amount, 5.0f));
+            lines.push_back ({ 3.0f + (50.0f - snr) * 0.15f, "Room noise at " + juce::String (juce::roundToInt (f.noiseFloorDb)) + " dB"
+                                                               + dash() + "Denoise on " + juce::String ((int) roundTo (amount, 5.0f)) + "%" });
+        }
+        else
+        {
+            set (ids::denoiseOn, 0.0f);
+            lines.push_back ({ 1.2f, "Quiet room" + dash() + "Denoise left off" });
+        }
+    }
+
     set (ids::plosiveOn, 1.0f);
     set (ids::plosiveAmount, extreme ? 70.0f : 50.0f);
     set (ids::deessAuto, 1.0f);

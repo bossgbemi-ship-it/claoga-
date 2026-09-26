@@ -7,13 +7,13 @@
 #  unless every output is bit-identical.
 #
 #  Usage: Tests/null_test.sh [build-dir]
-#  Env:   V1_REF    git ref of v1 (default: oju-v1.0.0)
+#  Env:   V1_REF    git ref of v1 (default: the OJU v1 release commit)
 #         JUCE_DIR  optional local JUCE checkout (skips the download)
 # -----------------------------------------------------------------------------
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${1:-$ROOT/build-null}"
-V1_REF="${V1_REF:-oju-v1.0.0}"
+V1_REF="${V1_REF:-d94ea2211ee1f780b1bcb39dedd7f6a9cce012ae}"   # OJU v1 (tag oju-v1.0.0)
 V1_DIR="$BUILD/v1-src"
 WORK="$BUILD/null-work"
 
@@ -26,7 +26,7 @@ fi
 
 EXTRA=()
 [ -n "${JUCE_DIR:-}" ] && EXTRA+=(-DFETCHCONTENT_SOURCE_DIR_JUCE="$JUCE_DIR")
-cmake -S "$ROOT" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DOJU_BUILD_TESTS=ON -DOJU_V1_SOURCE_DIR="$V1_DIR" "${EXTRA[@]}" >/dev/null
+cmake -S "$ROOT" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DOJU_BUILD_TESTS=ON -DOJU_V1_SOURCE_DIR="$V1_DIR" ${EXTRA[@]+"${EXTRA[@]}"} >/dev/null
 cmake --build "$BUILD" --config Release --target OJURender OJURenderV1 OJUTests --parallel 4 >/dev/null
 
 find_bin() { find "$BUILD" -type f \( -name "$1" -o -name "$1.exe" \) -path "*artefacts*" | head -1; }

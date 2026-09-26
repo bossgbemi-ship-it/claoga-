@@ -288,6 +288,9 @@ void OjuProcessor::applyBrain (const Features& f, bool rewriteRead)
     {
         if (manualKey && (id == ids::tuneKey || id == ids::tuneScale))
             continue;   // the artist set the key by hand: never overwrite it
+        if (! rewriteRead && (id == ids::tuneOn || id == ids::tuneKey || id == ids::tuneScale || id == ids::denoiseOn
+                              || id == ids::denoiseAmount))
+            continue;   // a genre preset (no Auto read) doesn't know the key or the room: leave them alone
         setParam (id, value);
     }
 
@@ -550,6 +553,7 @@ juce::ValueTree OjuProcessor::featuresToTree (const Features& f)
     t.setProperty ("sibilanceFreq", f.sibilanceFreq, nullptr);
     t.setProperty ("sibilanceDb", f.sibilanceDb, nullptr);
     t.setProperty ("airDb", f.airDb, nullptr);
+    t.setProperty ("noiseFloorDb", f.noiseFloorDb, nullptr);
     t.setProperty ("keyRoot", f.keyRoot, nullptr);
     t.setProperty ("keyMinor", f.keyMinor, nullptr);
     t.setProperty ("keyConfidence", f.keyConfidence, nullptr);
@@ -590,6 +594,7 @@ Features OjuProcessor::treeToFeatures (const juce::ValueTree& t)
     f.sibilanceFreq = get ("sibilanceFreq", f.sibilanceFreq);
     f.sibilanceDb = get ("sibilanceDb", f.sibilanceDb);
     f.airDb = get ("airDb", f.airDb);
+    f.noiseFloorDb = get ("noiseFloorDb", -90.0f);
     f.keyRoot = (int) t.getProperty ("keyRoot", -1);
     f.keyMinor = (bool) t.getProperty ("keyMinor", true);
     f.keyConfidence = get ("keyConfidence", 0.0f);

@@ -11,7 +11,7 @@ endif()
 # Static MSVC runtime: users never need to install the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(OJU VERSION 1.0.0 LANGUAGES C CXX)
+project(OJU VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

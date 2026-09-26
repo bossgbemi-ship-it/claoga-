@@ -63,7 +63,6 @@ private:
     // gains
     std::vector<float> binGain, binPower, noiseProfile, binHz;
     std::array<float, 32> bandGains {};
-    float releasePerFrame = 0.9f;
 
     // RNNoise analysis at 48 kHz (linear-interpolated side chain)
     DenoiseState* rnn = nullptr;

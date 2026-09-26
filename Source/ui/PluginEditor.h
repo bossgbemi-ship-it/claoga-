@@ -75,6 +75,14 @@ private:
         void paint (juce::Graphics&) override;
     };
 
+    // Fills the rack area in OJU Beat mode: the key, big, and how to link.
+    struct BeatGuide : public juce::Component
+    {
+        juce::String key, detail;
+        void set (const juce::String& k, const juce::String& d) { if (k != key || d != detail) { key = k; detail = d; repaint(); } }
+        void paint (juce::Graphics&) override;
+    };
+
     struct MeterFrame
     {
         float in = 0, out = 0, press = 0, tame = 0, level = 0, limiter = 0, plosive = 0;
@@ -97,6 +105,7 @@ private:
     EqCurveView eqCurve;
     Meter inMeter { Meter::Kind::level, "In" }, grMeter { Meter::Kind::reduction, "Comp" }, outMeter { Meter::Kind::level, "Out" };
     StatusInfo statusInfo;
+    BeatGuide beatGuide;
 
     std::array<std::unique_ptr<ModuleTile>, numModules> tiles;
     std::vector<std::unique_ptr<Knob>> knobs;

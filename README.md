@@ -1,65 +1,79 @@
-# OJU — the vocal chain that listens
+# OJU 2.0 — the vocal chain that listens
 
-**Ojú** is Yoruba for *eye*. Press the brass eye, sing, and OJU listens to the vocal and sets up its whole chain for you. Then it explains in plain English what it heard and what it changed.
+**Ojú** is Yoruba for *eye*. Press the brass eye (**Auto**), sing for 10 seconds, and OJU sets up all 12 modules of its vocal chain for you. Then it explains in plain English what it heard and what it changed. OJU 2.0 can also **hear the beat**: put a second copy on the beat track, and the vocal knows the key and gets room in the mix.
 
 Made by Joseph · [madebyjoseph.com](https://madebyjoseph.com) · Bundle ID `com.madebyjoseph.oju`
 
-![OJU](docs/oju.png)
+![OJU 2.0](docs/oju.png)
 
 | Platform | Formats |
 |---|---|
 | Windows 10/11 (x64) | VST3, Standalone |
 | macOS 10.13+ (universal: Apple Silicon + Intel) | VST3, AU, Standalone |
 
-Built with C++17, JUCE 8.0.15 (pinned through CMake FetchContent) and CMake. It uses no third-party plugins.
+Built with C++17, JUCE 8.0.15 (pinned through CMake FetchContent) and CMake. All DSP is our own code, except the RNNoise network (BSD-3-Clause), which Denoise uses.
 
 ---
 
-## Signal chain
+## The chain (fixed order, every module has a lit on/off switch)
 
-```
-Input gain → Low cut → Shape EQ → Tame → Press → Heat → Space → Amount → Output → Ceiling
-             24 dB/oct  Body shelf  split-band  soft-knee   2x oversampled   delay + reverb   dry/wet   gain   soft, -0.3 dBFS
-                        Mud (moveable) de-esser  comp + GR   asymmetric tube  tempo-synced    latency-
-                        Presence    (adjustable  meter       (drive + mix)    Slap … 1/4      compensated
-                        Air shelf    frequency) (+ parallel                   filtered repeats
-                                                 in Extreme)
-```
+| # | Module | What it does | Built from |
+|---|---|---|---|
+| 1 | **Denoise** | RNNoise cleanup, plus **Learn Room**: stay quiet for 2 s and OJU fingerprints the room's hum and hiss. Natural is gentle (floor -18 dB) and Extreme is aggressive (-30 dB). Slow per-bin release means sustained notes and ad-lib tails are never chopped. | new (RNNoise v0.1.1) |
+| 2 | **Cleanup** | High-pass set by voice type, plus a plosive tamer that turns down only the <150 Hz burst of a P or B | v1 low cut + new |
+| 3 | **Tune** | Pitch correction. Key comes from Beat Link, a beat file's key tag, the melody you sang (Auto) or a manual key/scale. **Retune** runs from Natural to Hard (robotic snap), plus **Humanize**. PSOLA keeps formants, so there is no chipmunk sound. | new (own YIN + PSOLA) |
+| 4 | **EQ** | The OJU v1 Shape EQ | **v1, unchanged** |
+| 5 | **De-esser** | Split-band Tame, plus **auto band** that follows where the S's are (4–10 kHz) | v1 + new |
+| 6 | **Compress** | Stage 1 is a gentle **leveler** with an auto threshold that follows your level. Stage 2 is the v1 **Press** character compressor. | new + **v1** |
+| 7 | **Saturate** | The OJU v1 Heat | **v1, unchanged** |
+| 8 | **Breath** | Detects breaths and turns them down (up to -18 dB; they are never deleted) | new |
+| 9 | **Double** | Synthetic double-tracking and stereo width. **Hook only** brings it in on the louder sections. | new |
+| 10 | **Delay** | Tempo-synced (1/4, 1/8, 1/8 dotted, plus slap and 1/16), filtered repeats. **Ducks while you sing.** | v1 Space + new |
+| 11 | **Reverb** | Classic (v1), room, plate or hall. **Ducks while you sing and blooms in the gaps.** | v1 Space + new |
+| 12 | **Output** | Vocal **rider** for consistent level, plus a **safety limiter** with a -1 dB ceiling. The v1 soft ceiling is still there. | new + v1 |
 
-- Every module has an on/off switch. Switching crossfades over 30 ms, so it never clicks.
-- All parameters are smoothed. Filters are topology-preserving SVFs that can move while audio plays without zipper noise.
-- The latency is 4 samples at every sample rate and is reported to the host. The dry path of Amount and of Bypass is delayed by the same amount, so blends never comb-filter.
-- Bypass is exposed to hosts as the plugin's bypass parameter.
+**Protecting what works.** The v1 EQ, saturation, compressor, de-esser, space and Natural/Extreme modes were not rewritten. OJU 2.0 wraps the v1 chain and inserts the new modules around it, each behind its own switch. With every 2.0 module off, **the output is bit-identical to OJU v1**. This is checked after every build phase by the null test below, and v1 presets load with all 2.0 modules off.
 
-## The brain
+## Global controls
 
-1. **Listen.** When you press the eye, the audio thread copies the input into a lock-free FIFO. A background thread runs a voice-activity gate with an adaptive noise floor, so **only moments where the artist is actually singing count**.
-   - **Natural** needs about 4 s of singing and uses a 2048-point FFT. Its moves are gentle.
-   - **Extreme** needs about 10 s and uses an 8192-point FFT with 75 % overlap. It detects sibilance from percentiles (the spectrum of the top 10 % most sibilant frames), makes stronger moves, and adds a parallel compression stage.
-2. **Measure.** The brain measures:
-   - Level: RMS percentiles p10/p50/p90/p95 of the voiced frames
-   - Dynamics and crest factor
-   - Rumble
-   - Mud and boxiness: how much build-up, and the exact resonant frequency
-   - Presence and harshness
-   - Sibilance: severity and the S frequency
-   - Air
-   - Host tempo
+- **Auto (the eye):** listens to 10 s of real singing and sets every module. It also hears the key of your melody. The Read explains each move.
+- **Genre:** Afrobeats, Rap, R&B, Amapiano or Gospel. The v1 styles Trap, Pop and Soul are still in the Presets menu.
+- **Natural / Extreme:** applies across all modules, and every module can still be tweaked.
+- **Track / Mix:**
+  - **Track** means zero latency for recording. The lookahead modules (Denoise, Tune, limiter lookahead) rest, and Saturate runs at 1×.
+  - **Mix** means the highest quality, and **the exact latency is reported to Reaper**:
+    - v1 chain: 4 samples
+    - Denoise: +21 ms
+    - Tune: +64 ms
+    - Limiter: +1.5 ms
+- **Bypass**, **A/B** (two settings), and **v1** (hear the plain OJU v1 sound, all 2.0 modules off).
+- **Presets:** genre presets, and save/load your own. They are stored in `Documents/Made by Joseph/OJU/Presets`.
+- **CPU meter** and **Beat Link light** in the right-hand column.
 
-   Tone is measured on non-sibilant frames, so S's aren't mistaken for air.
-3. **Decide.** The brain maps these measurements onto targets for the selected style: **Afrobeats, Trap, R&B, Pop or Soul**. Every value is sent through the host with begin/end change gestures, so it is automatable and undoable.
-4. **The Read.** OJU shows 4–6 lines, for example *"Muddy around 300 Hz — cut 6.0 dB"*, *"Sharp S's at 7.5 kHz — Tame set to 71%"* or *"Wide dynamics — Press at 3.5:1"*, plus one idea for the artist.
+## Beat Link: OJU hears the beat
 
-Changing the style or mode later re-targets from the last read without listening again. The read is saved with the session.
+A plugin on the vocal track can't change the beat's audio, so OJU has a second role:
 
-**A/B**: the button switches between two complete settings. The first switch copies A into B.
+1. Put OJU on the **beat track** and switch it to **Beat** (top left).
+2. Put OJU on the **vocal track** (Vocal) in the **same link group** (A–D, default A).
+3. That's it. There's no sidechain routing: the two copies talk to each other inside Reaper. Then:
+   - OJU Beat hears the beat's key and sends it to the vocal's **Tune** (with Tune's key source on Auto).
+   - With **Carve** on, OJU Beat dips the beat's frequencies that fight the vocal, **only while the vocal is singing**. It's a dynamic EQ driven by the vocal.
+
+![OJU Beat](docs/oju_beat.png)
+
+Beat Link needs both copies in the same process, which is Reaper's default. If you've set Reaper to run plugins in a separate or dedicated process, set OJU back to *native*. With no beat track loaded, **Tune → Key from beat file** reads the key tag (filename such as `Beat Gmin 102bpm`, WAV/ACID tags or MP3 `TKEY`), or listens to the file.
 
 ## Performance
 
-Measured on one core at 48 kHz stereo with 256-sample blocks: **about 2 % CPU** in both Natural and Extreme, which is roughly 50× real time.
+Measured on one core at 48 kHz stereo with 256-sample blocks:
 
-- Nothing in the audio callback allocates memory, takes a lock or touches a file. The test runner enforces this with an allocation guard.
-- The analysis runs entirely off the audio thread.
+| Configuration | CPU |
+|---|---|
+| v1 sound (all 2.0 modules off) | about 1.7 % |
+| All 12 modules on | about 7 % |
+
+**A module that's off costs nothing.** Nothing in the audio callback allocates memory, takes a lock or touches a file (the tests enforce this). All analysis (Auto, the beat's key, Learn Room) runs off the audio thread.
 
 ---
 
@@ -127,19 +141,36 @@ cmake -S . -B build -DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE-8.0.15
 
 ## Using it
 
-1. Put OJU on the vocal track and pick a **style** and a **mode**.
-2. Press the **eye**, then play the vocal or sing. The ring fills only while there is singing. Press the eye again to stop.
-3. Read **The Read**, then tweak anything by hand. Every knob is a normal automatable parameter.
+1. Put OJU on the vocal track and pick a **genre** and **Natural/Extreme**.
+2. Press the **eye** (Auto), then play the vocal or sing. The ring fills only while there is singing. Press again to stop.
+3. Read **The Read**. Tap any tile in the rack to open its knobs, and tap the big lamp on a tile to switch that module on or off.
+4. When recording, switch to **Track**, which gives zero latency. Switch back to **Mix** for the mix.
 
 Tips:
-- **The host must be sending audio.** In Logic, press play or record-arm/input-monitor the track. In the other DAWs, play the take or arm the track.
-- **In Standalone**, JUCE mutes the input by default to prevent speaker feedback. The first tap on the eye tells you so. Put headphones on and tap again, and OJU unmutes and listens.
-- Double-click any knob to reset it. Drag vertically or horizontally, or use the scroll wheel.
+- **The host must be sending audio.** Play the take or arm the track.
+- **In Standalone**, JUCE mutes the input by default to prevent speaker feedback. The first tap on the eye tells you so. Put headphones on and tap again.
+- Double-click any knob to reset it.
 - The window resizes at a fixed aspect ratio, and everything is drawn as vectors, so it stays sharp at any size.
 
 ---
 
 ## Tests and validation
+
+### Null test (v1 vs 2.0): run this on your own takes
+
+```bash
+# put your dry vocal takes (.wav) in testdata/takes/, then (Linux/macOS, or Git Bash on Windows):
+Tests/null_test.sh
+```
+
+The script builds the frozen OJU v1 source (v1's commit `d94ea22`, tagged `oju-v1.0.0`) and the current source with identical compiler settings. It then renders every take through both:
+- a default preset
+- presets made by v1's own Listen in several styles and modes
+- block sizes 512 and 333
+
+Each v2 render loads the v1 preset, with all 2.0 modules off, and must match v1 **to the last bit**. Synthetic takes are always included, so it runs even with an empty folder. It passed 16/16 after each of the five build phases.
+
+### The test runner
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOJU_BUILD_TESTS=ON
@@ -147,30 +178,58 @@ cmake --build build --target OJUTests
 build/OJUTests_artefacts/Release/OJUTests <folder-for-screenshots>
 ```
 
-The runner uses a synthetic singer: a gliding harmonic voice with formants, a planted 320 Hz mud resonance, 7.2 kHz sibilant bursts, breaths and room noise. It checks:
+The synthetic singer is a gliding voice with formants, a mud resonance, S bursts, breaths and noise. The runner checks v1 behaviour (Listen, ragged blocks, allocation guard, latency, state) plus every 2.0 module:
+- **Cleanup/Output:** the plosive pop comes down 8 dB while the voice is untouched; the limiter holds -1.00 dBFS; the rider evens a 16 dB verse/hook jump to 10.5 dB.
+- **De-esser:** auto band finds the S's.
+- **Delay/Reverb:** delay ducks 18 dB while singing; the reverb types ring as expected.
+- **Compress:** the leveler evens the level.
+- **Breath:** breaths are turned down 18 dB while sung notes and tails are untouched.
+- **Double:** Hook only stays out of the verse.
+- **Denoise:**
+  - transparent at 0%
+  - noise in the gaps down 16.5 dB (Natural) or 26.5 dB (Extreme)
+  - tails kept
+  - the learned room hum comes down 18 dB
+- **Tune:**
+  - exact reconstruction at 0%
+  - sustained notes from low male to high female land within about 1 cent, with clean periodicity
+  - Natural glides in; Humanize keeps vibrato
+  - fast runs: note bodies 100% in tune
+  - formants kept
+  - the key of a sung melody is found
+- **Beat Link:**
+  - key tags parsed
+  - a beat's key found by ear
+  - two live instances link with no routing and the key reaches Tune
+  - Carve dips the beat only while the vocal sings
+  - Carve off leaves the beat bit-identical
+- **Everywhere:** Track mode = zero latency; the **v1 button is bit-identical to v1**; the editor is snapshotted.
 
-- Natural and Extreme Listen end-to-end: it finds the mud and the S frequency, gain-stages the level, and writes a 4–6 line Read.
-- 3,000 ragged blocks (1 to 4,096 samples, including blocks larger than prepared) while style, mode, module, bypass and sample rate change and Listen starts and stops. The output must never contain NaN or Inf and must never exceed −0.3 dBFS.
-- **Zero heap allocations inside `processBlock`**, enforced by a global `operator new` guard.
-- Reported latency, sample-exact dry alignment, and a phase-coherent Amount blend.
-- CPU cost, state save/restore (including The Read, the A/B slots and re-targeting after reload), mono tracks, and editor screenshots at three sizes.
-
-**pluginval** at strictness level 10 passes on the VST3. CI (`.github/workflows/build.yml`) builds Windows, macOS (universal, with `auval`) and Linux, and runs the tests and pluginval on each. It also fails the build on any compiler warning in OJU's own code. Every run uploads the built plugins as artifacts.
+**pluginval** at strictness level 10 passes on the VST3. CI (`.github/workflows/build.yml`) builds Windows, macOS (universal, with `auval`) and Linux. On each, it runs the test runner and pluginval, and fails the build on any compiler warning in OJU's own code. The **null test runs on Windows and Linux**. Every run uploads the built plugins as artifacts.
 
 ## Project layout
 
 ```
 Source/
-  PluginProcessor.*     parameters, processBlock, brain → host gestures, A/B, state
-  Parameters.*          every parameter ID, range and display format
-  dsp/VocalChain.*      the whole real-time chain (+ Svf.h)
-  brain/Listener.*      lock-free capture, voice gate, FFT analysis (background thread)
-  brain/Brain.*         measurements → settings + The Read (pure, deterministic)
-  ui/                   look and feel, brass eye, EQ curve, meters, cards, editor
+  PluginProcessor.*     parameters, roles (vocal/beat), brain -> host gestures, A/B, presets, state
+  Parameters.*          every parameter ID, range and display format (v1 IDs unchanged)
+  dsp/VocalChain.*      the v1 chain, with the 2.0 insert points (bit-identical when unused)
+  dsp/Engine.*          2.0 signal flow: Denoise -> Plosive -> Tune -> v1 chain (+ inserts) -> Limiter
+  dsp/modules/          Denoiser, PlosiveTamer, Tuner + PitchDetector (YIN), BreathControl,
+                        Doubler, Limiter, Carve, KeyDetector (beat key, file tags)
+  link/LinkHub.h        Beat Link: lock-free in-process link between OJU instances
+  brain/                Auto: capture, voice gate, FFT analysis, melody key; Brain = settings + Read
+  ui/                   look and feel, brass eye, module rack, detail views, meters, EQ curve
+third_party/rnnoise/    RNNoise v0.1.1 (BSD-3-Clause), see README.OJU.md
 Tests/OjuTests.cpp      headless test runner
+Tests/Render.cpp        offline renderer (built from v1 and v2 sources) for the null test
+Tests/null_test.sh      the v1 <-> 2.0 null test
 docs/SHIPPING.md        what you still need before selling
 ```
 
 ## Licence notes
 
-JUCE is dual-licensed: AGPLv3 or a commercial JUCE licence. **To sell OJU as closed source you need a JUCE licence**. The free *Starter* tier covers you up to its revenue limit; check the current terms at juce.com. See `docs/SHIPPING.md`.
+- **JUCE** is dual-licensed: AGPLv3 or a commercial JUCE licence. **To sell OJU as closed source you need a JUCE licence**. The free *Starter* tier covers you up to its revenue limit; check the current terms at juce.com.
+- **RNNoise** is BSD-3-Clause, which allows selling. Ship its `COPYING` text with the product (manual or installer licence page).
+- **Everything else is our own code.** There is no GPL code anywhere. The pitch correction is our own YIN + PSOLA, and it's always called **Tune**: never by another company's trademarked name.
+- See `docs/SHIPPING.md`.

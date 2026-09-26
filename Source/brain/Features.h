@@ -34,6 +34,9 @@ struct Features
 
     std::array<float, spectrumPoints> spectrumDb {};
 
+    // OJU 2.0: background noise (quiet moments between phrases)
+    float noiseFloorDb = -90.0f;
+
     // OJU 2.0: the key of the sung melody (pitch-class histogram vs key profiles)
     int   keyRoot = -1;          // 0 = C .. 11 = B, -1 unknown
     bool  keyMinor = true;

@@ -3,7 +3,7 @@
 ; Sign the installer and the plugin with your code-signing certificate before release (see docs/SHIPPING.md).
 
 #define AppName "OJU"
-#define AppVersion "1.0.0"
+#define AppVersion "2.0.0"
 #define Company "Made by Joseph"
 #define BuildDir "..\..\build-win\OJU_artefacts\Release"
 
@@ -37,6 +37,7 @@ Name: "app";  Description: "Standalone app"; Types: full custom
 [Files]
 Source: "{#BuildDir}\VST3\OJU.vst3\*"; DestDir: "{commoncf64}\VST3\OJU.vst3"; Components: vst3; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#BuildDir}\Standalone\OJU.exe"; DestDir: "{app}"; Components: app; Flags: ignoreversion
+Source: "..\..\third_party\rnnoise\COPYING"; DestDir: "{app}\Licences"; DestName: "RNNoise (BSD-3-Clause).txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\OJU"; Filename: "{app}\OJU.exe"; Components: app

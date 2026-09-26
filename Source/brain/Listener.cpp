@@ -365,6 +365,23 @@ Features Listener::analyse (const std::vector<float>& audio, const std::vector<c
     f.crestDb = f.peakDb - (float) (10.0 * std::log10 (powerSum / (double) rms.size() + 1.0e-12));
     f.dynamicsDb = f.rmsP95 - f.rmsP10;
 
+    // OJU 2.0: the room's noise floor = the quiet end of the frames the singer isn't using
+    {
+        std::vector<float> quiet;
+        for (size_t fr = 0; fr < voicedMask.size(); ++fr)
+        {
+            if (voicedMask[fr]) continue;
+            const float* p = audio.data() + fr * (size_t) frameLen;
+            double sum = 0.0;
+            for (int i = 0; i < frameLen; ++i) sum += (double) p[i] * p[i];
+            const float db = (float) (10.0 * std::log10 (sum / frameLen + 1.0e-12));
+            if (db < f.rmsP50 - 15.0f)   // real gaps, not the edges of notes
+                quiet.push_back (db);
+        }
+        f.noiseFloorDb = quiet.size() >= 10 ? percentile (quiet, 0.3f) : -90.0f;
+    }
+
+
     // ---- Spectral analysis of voiced FFT frames
     int order = mode == 1 ? 13 : 11;
     if (sr > 60000.0)  ++order;

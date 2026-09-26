@@ -111,6 +111,10 @@ OjuEditor::OjuEditor (OjuProcessor& p)
         t.setBounds (layout::tile (i));
     }
 
+    content.addChildComponent (beatGuide);
+    beatGuide.setBounds (layout::rack.expanded (6));
+    beatGuide.setInterceptsMouseClicks (false, false);
+
     buildViews();
 
     // ---- window: resizable, fixed aspect, vector-scaled
@@ -632,6 +636,12 @@ void OjuEditor::timerCallback()
         t.setVisible (! beatRole);
         t.setState (moduleOn (i), detail.current() == i, tileStatus (i), tileGr (i));
     }
+    beatGuide.setVisible (beatRole);
+    if (beatRole)
+        beatGuide.set (link.key >= 0 ? keyText (link.key, link.minor) : juce::String ("Listening..."),
+                       link.key >= 0 ? juce::String (juce::roundToInt (link.confidence * 100.0f)) + "% sure" + dot()
+                                       + juce::String (link.peers) + (link.peers == 1 ? " vocal linked" : " vocals linked")
+                                     : juce::String ("play the beat"));
     if (beatRole && detail.current() != DetailPanel::beatView)
         selectModule (DetailPanel::beatView);
     else if (! beatRole && detail.current() == DetailPanel::beatView)
@@ -764,6 +774,38 @@ void OjuEditor::Readout::paint (juce::Graphics& g)
     g.setFont (font (17.5f, true));
     g.setColour (valueColour);
     g.drawFittedText (value, inner.toNearestInt(), juce::Justification::centredLeft, 3, 0.85f);
+}
+
+void OjuEditor::BeatGuide::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    drawIronPlate (g, r, 12.0f, 777);
+    for (auto p : { r.getTopLeft(), r.getTopRight(), r.getBottomLeft(), r.getBottomRight() })
+        drawRivet (g, p + juce::Point<float> (p.x < r.getCentreX() ? 12.0f : -12.0f, p.y < r.getCentreY() ? 12.0f : -12.0f), 3.0f);
+
+    auto inner = r.reduced (36.0f, 26.0f);
+    auto left = inner.removeFromLeft (inner.getWidth() * 0.42f);
+    drawEngravedText (g, "The beat is in", left.removeFromTop (34.0f), juce::Justification::centredLeft, font (20.0f), boneDim);
+    drawEngravedText (g, key, left.removeFromTop (96.0f), juce::Justification::centredLeft, font (70.0f, true), brassLight);
+    drawEngravedText (g, detail, left.removeFromTop (30.0f), juce::Justification::centredLeft, font (18.0f), bone);
+
+    inner.removeFromLeft (30.0f);
+    drawRecess (g, inner, 8.0f);
+    auto steps = inner.reduced (24.0f, 18.0f);
+    drawEngravedText (g, "Beat Link: click and go", steps.removeFromTop (32.0f), juce::Justification::centredLeft, font (21.0f, true), brassLight);
+    const char* lines[] = {
+        "1   This OJU sits on your beat track, set to Beat.",
+        "2   Put OJU on the vocal track, same link group (A-D).",
+        "3   The beat's key goes straight to the vocal's Tune.",
+        "4   Carve on: the beat dips where the voice lives, only while you sing.",
+    };
+    for (auto* l : lines)
+    {
+        steps.removeFromTop (8.0f);
+        g.setFont (font (17.0f));
+        g.setColour (bone);
+        g.drawText (l, steps.removeFromTop (30.0f), juce::Justification::centredLeft, true);
+    }
 }
 
 void OjuEditor::StatusInfo::paint (juce::Graphics& g)

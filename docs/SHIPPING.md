@@ -7,6 +7,8 @@ The plugin, the builds and the validation are done. Here is what stands between 
 - **JUCE**: this is required. JUCE is AGPLv3 unless you hold a commercial licence. For a closed-source paid plugin, register a JUCE licence at juce.com. The free *Starter* tier applies below its revenue cap; check the current limits. Keep the licence email with your business records.
 - **VST3**: the bundled SDK (3.8) is MIT-licensed, so you don't need an agreement to ship VST3. To use the **VST logo** on your site or box, sign Steinberg's free trademark usage agreement.
 - **AU**: no licence is needed.
+- **RNNoise** (Denoise, OJU 2.0): BSD-3-Clause, so commercial use is fine. Include its copyright notice and licence text (`third_party/rnnoise/COPYING`) in your manual or installer.
+- **Trademarks**: never call Tune "Auto-Tune" (an Antares trademark). Use "Tune" or "pitch correction".
 
 ## 2. Code signing
 

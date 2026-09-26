@@ -457,6 +457,19 @@ static void testEditor (const juce::File& outDir)
             juce::PNGImageFormat().writeImageToStream (img, mos);
         }
         oe->showModule (13 - 1);   // back to The Read
+
+        // OJU Beat mode
+        setParam (*p, oju::ids::role, 1.0f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (120);
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto file = outDir.getChildFile ("oju_beat_mode.png");
+            file.deleteFile();
+            juce::FileOutputStream bos (file);
+            juce::PNGImageFormat().writeImageToStream (img, bos);
+        }
+        setParam (*p, oju::ids::role, 0.0f);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
     }
 
     // Listening state snapshot
@@ -483,7 +496,7 @@ static void testEditor (const juce::File& outDir)
 // OJU 2.0 module tests
 namespace v2
 {
-    juce::AudioBuffer<float> singer (double sr, float levelDb, double seconds, int chans = 2)
+    static juce::AudioBuffer<float> singer (double sr, float levelDb, double seconds, int chans = 2)
     {
         FakeSinger fs (sr, levelDb);
         juce::AudioBuffer<float> b (chans, (int) (seconds * sr));
@@ -496,7 +509,7 @@ namespace v2
         return b;
     }
 
-    juce::AudioBuffer<float> run (oju::OjuProcessor& p, const juce::AudioBuffer<float>& in, int block, bool& finite)
+    static juce::AudioBuffer<float> run (oju::OjuProcessor& p, const juce::AudioBuffer<float>& in, int block, bool& finite)
     {
         juce::AudioBuffer<float> out (in);
         juce::AudioBuffer<float> buf (in.getNumChannels(), block);
@@ -516,14 +529,14 @@ namespace v2
         return out;
     }
 
-    float rmsDb (const juce::AudioBuffer<float>& b, int start, int len, int ch = 0)
+    static float rmsDb (const juce::AudioBuffer<float>& b, int start, int len, int ch = 0)
     {
         start = juce::jlimit (0, b.getNumSamples() - 1, start);
         len = juce::jlimit (1, b.getNumSamples() - start, len);
         return juce::Decibels::gainToDecibels (b.getRMSLevel (ch, start, len), -200.0f);
     }
 
-    float peakDb (const juce::AudioBuffer<float>& b)
+    static float peakDb (const juce::AudioBuffer<float>& b)
     {
         float pk = 0.0f;
         for (int c = 0; c < b.getNumChannels(); ++c)
@@ -532,7 +545,7 @@ namespace v2
     }
 
     // Everything off, so a test hears only the module it switches on.
-    void neutral (oju::OjuProcessor& p)
+    static void neutral (oju::OjuProcessor& p)
     {
         for (auto* id : { oju::ids::lowCutOn, oju::ids::eqOn, oju::ids::tameOn, oju::ids::pressOn, oju::ids::heatOn,
                           oju::ids::spaceOn, oju::ids::ceilingOn })
@@ -543,7 +556,7 @@ namespace v2
         p.pumpMessageThreadWork();
     }
 
-    float bandRmsDb (const juce::AudioBuffer<float>& b, double sr, oju::SvfType type, double f, int start, int len)
+    static float bandRmsDb (const juce::AudioBuffer<float>& b, double sr, oju::SvfType type, double f, int start, int len)
     {
         auto c = oju::makeSvf (type, sr, f, 0.707);
         oju::SvfState st;
@@ -914,6 +927,29 @@ static void testPhase3Denoise()
         check (tailIn - tailOut < 3.0f, m + ": sustained-note tail not chopped (" + juce::String (tailOut - tailIn, 2) + " dB)");
     }
 
+    // ---- Auto hears the noisy room and switches Denoise on
+    {
+        auto p = makeProcessor (sr, 256);
+        float pk = 0.0f;
+        p->toggleListening();
+        juce::AudioBuffer<float> buf (2, 256);
+        int pos = 0;
+        for (int guard = 0; guard < 20000; ++guard)
+        {
+            for (int i = 0; i < 256; ++i)
+                for (int c = 0; c < 2; ++c)
+                    buf.setSample (c, i, noisy.getSample (c, (pos + i) % noisy.getNumSamples()));
+            pos += 256;
+            processBlockChecked (*p, buf, pk);
+            juce::Thread::sleep (1);
+            p->pumpMessageThreadWork();
+            if (p->getListenState() == oju::Listener::State::done || p->getListenState() == oju::Listener::State::failed) break;
+        }
+        for (int k = 0; k < 5; ++k) p->pumpMessageThreadWork();
+        check (getParam (*p, oju::ids::denoiseOn) > 0.5f, "Auto hears the hiss (floor " + juce::String (p->getFeatures().noiseFloorDb, 0)
+                                                            + " dB) and switches Denoise on at " + juce::String (getParam (*p, oju::ids::denoiseAmount), 0) + "%");
+    }
+
     // ---- Learn Room: fingerprint 2 s of hum + hiss, then remove it
     {
         auto room = [&] (int samples)
@@ -961,7 +997,7 @@ static void testPhase3Denoise()
 namespace tune
 {
     // A sung vowel with an arbitrary pitch contour (harmonics shaped by formants)
-    juce::AudioBuffer<float> sing (double sr, double seconds, const std::function<double (double)>& midiAt, float levelDb = -14.0f)
+    static juce::AudioBuffer<float> sing (double sr, double seconds, const std::function<double (double)>& midiAt, float levelDb = -14.0f)
     {
         juce::AudioBuffer<float> b (2, (int) (seconds * sr));
         auto c1 = oju::makeSvf (oju::SvfType::bell, sr, 700.0, 2.0, 10.0);
@@ -989,7 +1025,7 @@ namespace tune
 
     struct Point { double t; float midi; float clarity; };
 
-    std::vector<Point> track (const juce::AudioBuffer<float>& b, double sr, int offset = 0)
+    static std::vector<Point> track (const juce::AudioBuffer<float>& b, double sr, int offset = 0)
     {
         oju::PitchDetector d;
         d.prepare (sr);
@@ -1000,7 +1036,7 @@ namespace tune
         return out;
     }
 
-    float centsOff (float midi, int key, int scale)
+    static float centsOff (float midi, int key, int scale)
     {
         float best = 1000.0f;
         for (int n = (int) std::floor (midi) - 2; n <= (int) std::ceil (midi) + 2; ++n)
@@ -1009,7 +1045,7 @@ namespace tune
         return best;
     }
 
-    std::unique_ptr<oju::OjuProcessor> tuner (double sr, int key, int scale, float speed, float humanize, float amount = 100.0f)
+    static std::unique_ptr<oju::OjuProcessor> tuner (double sr, int key, int scale, float speed, float humanize, float amount = 100.0f)
     {
         auto p = makeProcessor (sr, 256);
         v2::neutral (*p);
@@ -1024,7 +1060,7 @@ namespace tune
         return p;
     }
 
-    float spectralCentroid (const juce::AudioBuffer<float>& b, int start, int len, double sr)
+    static float spectralCentroid (const juce::AudioBuffer<float>& b, int start, int len, double sr)
     {
         const int order = 13, N = 1 << order;
         juce::dsp::FFT fft (order);
@@ -1090,7 +1126,7 @@ static void testPhase4Tune()
         for (auto& pt : tune::track (in, sr))  if (pt.t > 0.3 && pt.t < 2.7) sumIn += std::abs (pt.midi - 57.0f) * 100.0;
         for (auto& pt : tune::track (out, sr, L)) if (pt.t > 0.3 && pt.t < 2.7) { sumOut += std::abs (pt.midi - 57.0f) * 100.0; ++cnt; }
         const auto trIn = tune::track (in, sr);
-        const float inErr = (float) (sumIn / std::max<size_t> (1, trIn.size()));
+        const float inErr = (float) (sumIn / (double) std::max<size_t> (1, trIn.size()));
         const float outErr = (float) (sumOut / juce::jmax (1, cnt));
         check (outErr < 8.0f, "sustained note: " + juce::String (inErr, 0) + " cents off -> " + juce::String (outErr, 1) + " cents (Hard)");
         check (std::abs (v2::rmsDb (out, (int) (1.0 * sr), (int) sr) - v2::rmsDb (in, (int) (1.0 * sr), (int) sr)) < 1.0f, "Tune keeps the level");
@@ -1146,8 +1182,8 @@ static void testPhase4Tune()
             std::vector<float> v;
             for (auto& pt : tune::track (out, sr, p->getLatencySamples()))
                 if (pt.t > 0.4 && pt.t < 2.6) v.push_back (pt.midi);
-            double m = 0; for (auto x : v) m += x; m /= std::max<size_t> (1, v.size());
-            double sd = 0; for (auto x : v) sd += (x - m) * (x - m); sd = std::sqrt (sd / std::max<size_t> (1, v.size()));
+            double m = 0; for (auto x : v) m += x; m /= (double) std::max<size_t> (1, v.size());
+            double sd = 0; for (auto x : v) sd += (x - m) * (x - m); sd = std::sqrt (sd / (double) std::max<size_t> (1, v.size()));
             meanErr = (float) std::abs (m - 57.0) * 100.0f;
             depth = (float) sd * 100.0f;
         };
@@ -1262,7 +1298,7 @@ static void testPhase4Tune()
 namespace beat
 {
     // Am - F - C - G at 100 BPM: pads, bass, kick and hats
-    juce::AudioBuffer<float> make (double sr, double seconds)
+    static juce::AudioBuffer<float> make (double sr, double seconds)
     {
         const int chords[4][3] = { { 57, 60, 64 }, { 53, 57, 60 }, { 48, 52, 55 }, { 55, 59, 62 } };
         const int bass[4] = { 45, 41, 48, 43 };
@@ -1293,7 +1329,7 @@ namespace beat
         return b;
     }
 
-    bool sameNotes (int key, bool minor, int refKey, bool refMinor)
+    static bool sameNotes (int key, bool minor, int refKey, bool refMinor)
     {
         for (int pc = 0; pc < 12; ++pc)
             if (oju::Tuner::noteInScale (pc, key, minor ? 1 : 0) != oju::Tuner::noteInScale (pc, refKey, refMinor ? 1 : 0))
@@ -1301,7 +1337,7 @@ namespace beat
         return true;
     }
 
-    bool writeWav (const juce::File& f, const juce::AudioBuffer<float>& b, double sr)
+    static bool writeWav (const juce::File& f, const juce::AudioBuffer<float>& b, double sr)
     {
         f.deleteFile();
         std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (f);
