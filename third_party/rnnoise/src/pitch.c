@@ -294,9 +294,11 @@ void rnn_pitch_search(const opus_val16 *x_lp, opus_val16 *y,
    celt_assert(max_pitch>0);
    lag = len+max_pitch;
 
-   opus_val16 x_lp4[len>>2];
-   opus_val16 y_lp4[lag>>2];
-   opus_val32 xcorr[max_pitch>>1];
+   /* OJU: fixed-size arrays instead of C99 VLAs (MSVC); RNNoise sizes stay far below. */
+   opus_val16 x_lp4[OJU_RNN_MAX_ARRAY];
+   opus_val16 y_lp4[OJU_RNN_MAX_ARRAY];
+   opus_val32 xcorr[OJU_RNN_MAX_ARRAY];
+   celt_assert((len>>2) <= OJU_RNN_MAX_ARRAY && (lag>>2) <= OJU_RNN_MAX_ARRAY && (max_pitch>>1) <= OJU_RNN_MAX_ARRAY);
 
    /* Downsample by 2 again */
    for (j=0;j<len>>2;j++)
@@ -440,7 +442,8 @@ opus_val16 rnn_remove_doubling(opus_val16 *x, int maxperiod, int minperiod,
       *T0_=maxperiod-1;
 
    T = T0 = *T0_;
-   opus_val32 yy_lookup[maxperiod+1];
+   opus_val32 yy_lookup[OJU_RNN_MAX_ARRAY];   /* OJU: was a VLA [maxperiod+1] */
+   celt_assert(maxperiod+1 <= OJU_RNN_MAX_ARRAY);
    dual_inner_prod(x, x, x-T0, N, &xx, &xy);
    yy_lookup[0] = xx;
    yy=xx;

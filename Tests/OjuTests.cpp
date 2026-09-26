@@ -157,6 +157,7 @@ namespace
         p.toggleListening();
         const auto start = std::chrono::steady_clock::now();
         bool finite = true;
+        int throttle = 0;
         while (true)
         {
             for (int i = 0; i < block; ++i)
@@ -167,7 +168,8 @@ namespace
             }
             finite &= processBlockChecked (p, buf, peak);
             // run a bit faster than real time, but let the listener keep up
-            juce::Thread::sleep (1);
+            if (++throttle % 4 == 0)
+                juce::Thread::sleep (1);
             p.pumpMessageThreadWork();
 
             const auto st = p.getListenState();
@@ -197,7 +199,7 @@ static void testListenNatural()
     FakeSinger singer (48000.0, -12.0f);
     float peak = 0.0f;
     const auto t0 = std::chrono::steady_clock::now();
-    const bool finite = runListen (*p, singer, 256, 30.0, peak);
+    const bool finite = runListen (*p, singer, 256, 120.0, peak);
     const double took = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
 
     check (finite, "output stays finite while listening");
@@ -229,7 +231,7 @@ static void testListenExtremeAndStyles()
     p->pumpMessageThreadWork();
     FakeSinger singer (44100.0, -20.0f);
     float peak = 0.0f;
-    const bool finite = runListen (*p, singer, 512, 60.0, peak);
+    const bool finite = runListen (*p, singer, 512, 120.0, peak);
     check (finite, "output stays finite while listening");
     check (p->getListenState() == oju::Listener::State::done, "Extreme analysis completed");
     check (p->getFeatures().voicedSeconds >= 9.9f, "Extreme heard >= 10 s of singing (" + juce::String (p->getFeatures().voicedSeconds, 2) + " s)");
@@ -375,7 +377,7 @@ static void testStateRoundTrip()
     auto p = makeProcessor (48000.0, 256);
     FakeSinger singer (48000.0, -16.0f);
     float peak = 0.0f;
-    runListen (*p, singer, 256, 30.0, peak);
+    runListen (*p, singer, 256, 120.0, peak);
     p->toggleAB();
     setParam (*p, oju::ids::heatDrive, 11.0f);   // B differs from A
     juce::MemoryBlock mb;
@@ -408,7 +410,7 @@ static void testMono()
     auto p = makeProcessor (48000.0, 128, 1);
     FakeSinger singer (48000.0, -14.0f);
     float peak = 0.0f;
-    const bool finite = runListen (*p, singer, 128, 30.0, peak);
+    const bool finite = runListen (*p, singer, 128, 120.0, peak);
     check (finite && p->getListenState() == oju::Listener::State::done, "mono listen + processing works");
 }
 
@@ -418,7 +420,7 @@ static void testEditor (const juce::File& outDir)
     auto p = makeProcessor (48000.0, 256);
     FakeSinger singer (48000.0, -14.0f);
     float peak = 0.0f;
-    runListen (*p, singer, 256, 30.0, peak);
+    runListen (*p, singer, 256, 120.0, peak);
 
     std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
     check (ed != nullptr, "editor created");

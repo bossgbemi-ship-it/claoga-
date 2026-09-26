@@ -71,7 +71,7 @@ namespace
             for (int i = 0; i < x.getNumSamples(); ++i)
             {
                 const float d = x.getSample (c, i) - y.getSample (c, i);
-                if (d != 0.0f) ++differing;
+                if (! juce::exactlyEqual (d, 0.0f)) ++differing;
                 maxDiff = juce::jmax (maxDiff, (double) std::abs (d));
                 peak = juce::jmax (peak, (double) std::abs (x.getSample (c, i)));
             }

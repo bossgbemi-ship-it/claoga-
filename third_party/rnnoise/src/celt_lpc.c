@@ -101,7 +101,8 @@ int rnn_autocorr(
    int fastN=n-lag;
    int shift;
    const opus_val16 *xptr;
-   opus_val16 xx[n];
+   opus_val16 xx[OJU_RNN_MAX_ARRAY];   /* OJU: was a VLA [n] */
+   celt_assert(n <= OJU_RNN_MAX_ARRAY);
    celt_assert(n>0);
    celt_assert(overlap>=0);
    if (overlap == 0)

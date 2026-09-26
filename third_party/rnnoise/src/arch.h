@@ -34,6 +34,9 @@
 #ifndef ARCH_H
 #define ARCH_H
 
+/* OJU modification: bound for arrays that were C99 VLAs (not supported by MSVC). */
+#define OJU_RNN_MAX_ARRAY 2048
+
 #include "opus_types.h"
 #include "common.h"
 
