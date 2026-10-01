@@ -101,6 +101,45 @@ jobs:
             ${{ matrix.artefacts }}/Standalone
           if-no-files-found: ignore
 
+      # ---- One-click installers: OJU-x.y.z-Windows-Setup.exe and OJU-x.y.z-macOS.pkg
+      - name: Version
+        id: version
+        run: echo "v=$(sed -nE 's/^project *\(OJU VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; if ($LASTEXITCODE) { exit 1 } }
+          $build = (Resolve-Path "${{ matrix.artefacts }}").Path
+          & $iscc /Q "/DAppVersion=${{ steps.version.outputs.v }}" "/DBuildDir=$build" installer\windows\OJU.iss
+          if ($LASTEXITCODE) { exit 1 }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Move-Item installer\windows\output\*.exe dist\
+
+      - name: macOS installer (pkg)
+        if: runner.os == 'macOS'
+        env:
+          OUT: ${{ matrix.artefacts }}
+          STAGE: build/pkg
+        run: |
+          installer/mac/make-pkg.sh "${{ steps.version.outputs.v }}"
+          pkgutil --check-signature dist/*.pkg || true
+          pkgutil --expand dist/*.pkg build/pkg-check
+          find build/pkg-check -maxdepth 1
+          for part in OJU-AU OJU-VST3 OJU-App; do test -f "build/pkg-check/$part.pkg/Payload"; done
+
+      - name: Upload installer
+        if: runner.os != 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OJU-${{ runner.os }}-Installer
+          path: |
+            dist/*.exe
+            dist/*.pkg
+          if-no-files-found: error
+
   # OJU 2.0 regression guard: v2 with all 2.0 modules off must null against v1, bit for bit.
   null-test:
     name: Null test v1 vs 2.0 (${{ matrix.os }})
@@ -125,3 +164,25 @@ jobs:
             libxrender-dev libgl1-mesa-dev
       - name: Null test
         run: Tests/null_test.sh "$PWD/build-null"
+
+  # Push a tag like v2.0.1 to publish both installers on the repo's Releases page.
+  release:
+    name: Release installers
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, null-test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: OJU-*-Installer
+          path: installers
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" installers/*.exe installers/*.pkg \
+            --title "OJU ${GITHUB_REF_NAME#v}" --notes-file docs/INSTALL.md

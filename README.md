@@ -13,6 +13,17 @@ Made by Joseph · [madebyjoseph.com](https://madebyjoseph.com) · Bundle ID `com
 
 Built with C++17, JUCE 8.0.15 (pinned through CMake FetchContent) and CMake. All DSP is our own code, except the RNNoise network (BSD-3-Clause), which Denoise uses.
 
+## Install
+
+Download the installer for your computer and double-click it. No files to copy by hand.
+
+- **Windows:** `OJU-2.0.0-Windows-Setup.exe` installs the VST3 (plus the Standalone app, if you want it).
+- **Mac:** `OJU-2.0.0-macOS.pkg` installs the AU, the VST3 and the Standalone app, on Apple Silicon or Intel.
+
+Every build on GitHub Actions makes both installers. They're under **Artifacts** on the run's page, as *OJU-Windows-Installer* and *OJU-macOS-Installer*. Pushing a version tag (for example `v2.0.1`) also publishes them on the repo's **Releases** page.
+
+Until OJU is code-signed, Windows and macOS each ask once before opening the installer. **[docs/INSTALL.md](docs/INSTALL.md)** has the step-by-step guide, including that one-time click-through.
+
 ---
 
 ## The chain (fixed order, every module has a lit on/off switch)
@@ -136,6 +147,8 @@ cmake -S . -B build -DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE-8.0.15
 ---
 
 ## Installing in your DAW
+
+The installers put OJU in the system plugin folders: `C:\Program Files\Common Files\VST3` on Windows; `/Library/Audio/Plug-Ins/VST3` and `/Library/Audio/Plug-Ins/Components` on Mac. `build-mac.sh install` uses the per-user `~/Library/...` folders instead. DAWs scan both.
 
 | DAW | Where the plugin goes | Then |
 |---|---|---|

@@ -26,9 +26,17 @@ Unsigned plugins trigger security warnings, and on macOS they won't even load fo
 
 ## 3. Installers
 
-- **Windows (Inno Setup)**: `installer/windows/OJU.iss` is ready. It installs the VST3 into `C:\Program Files\Common Files\VST3` and the app into Program Files, and includes an uninstaller. Build the plugin, compile the script in Inno Setup 6, then sign the output.
-- **macOS (pkg)**: `installer/mac/make-pkg.sh` builds one component package per format (VST3 → `/Library/Audio/Plug-Ins/VST3`, AU → `/Library/Audio/Plug-Ins/Components`, the app → `/Applications`), wraps them in a signed product archive, and notarises and staples it.
-- Ship a **PDF manual** or a manual page, and an **EULA**. Both installers can show the EULA.
+CI builds both installers on every push (artifacts *OJU-Windows-Installer* and *OJU-macOS-Installer*). Pushing a tag such as `v2.0.1` publishes them on the GitHub Releases page.
+
+- **Windows (Inno Setup)**: `installer/windows/OJU.iss` installs the VST3 into `C:\Program Files\Common Files\VST3` and the app into Program Files, with an uninstaller. A new version installs over the old one. To sign it, set `SignTool` in the script, or sign the output `.exe` with `signtool`.
+- **macOS (pkg)**: `installer/mac/make-pkg.sh` builds one component package per format:
+  - VST3 → `/Library/Audio/Plug-Ins/VST3`
+  - AU → `/Library/Audio/Plug-Ins/Components`, then refreshes the AU cache
+  - app → `/Applications`
+
+  It wraps them in a product archive with OJU's welcome and finish pages. With `DEV_APP` / `DEV_INST` set, it also signs with your Developer ID, then notarises and staples. Without them it builds an unsigned test installer.
+- Once both are signed, the one-time security prompts in `docs/INSTALL.md` disappear. Remove those paragraphs then.
+- Ship a **PDF manual** or a manual page, and an **EULA**. Both installers can show the EULA (Inno `LicenseFile=`, pkg `<license>`).
 
 ## 4. Licence keys and copy protection
 

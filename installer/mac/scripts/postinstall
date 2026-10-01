@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refresh the Audio Unit cache so Logic / GarageBand pick up OJU without a restart.
+killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
+exit 0
