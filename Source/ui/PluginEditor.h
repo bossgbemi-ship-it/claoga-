@@ -34,6 +34,7 @@ private:
     void toggleModule (int id);
     void selectModule (int id);
     juce::String tileStatus (int id) const;
+    juce::String tempoText() const;
     float tileGr (int id) const;
 
     // Building the module views
@@ -62,15 +63,15 @@ private:
         void paint (juce::Graphics&) override;
     };
 
-    // CPU, latency and Beat Link status in the right-hand column.
+    // Tempo, CPU + latency, and Beat Link status in the right-hand column.
     struct StatusInfo : public juce::Component
     {
-        juce::String cpu, latency, link;
-        bool linked = false;
-        void set (const juce::String& c, const juce::String& l, const juce::String& k, bool isLinked)
+        juce::String tempo, load, link;
+        bool tempoLive = false, linked = false;
+        void set (const juce::String& t, bool isLive, const juce::String& l, const juce::String& k, bool isLinked)
         {
-            if (c == cpu && l == latency && k == link && isLinked == linked) return;
-            cpu = c; latency = l; link = k; linked = isLinked; repaint();
+            if (t == tempo && isLive == tempoLive && l == load && k == link && isLinked == linked) return;
+            tempo = t; tempoLive = isLive; load = l; link = k; linked = isLinked; repaint();
         }
         void paint (juce::Graphics&) override;
     };

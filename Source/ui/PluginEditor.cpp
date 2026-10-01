@@ -388,6 +388,22 @@ float OjuEditor::tileGr (int id) const
     }
 }
 
+juce::String OjuEditor::tempoText() const
+{
+    const auto bpm = juce::String (ojuProcessor.getHostBpm(), 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+    switch (ojuProcessor.getBpmSource())
+    {
+        case OjuProcessor::BpmSource::live:
+        {
+            const juce::String host = juce::PluginHostType().getHostDescription();
+            return bpm + " BPM" + (host.isNotEmpty() && host != "Unknown" ? " from " + host : juce::String (" from your DAW"));
+        }
+        case OjuProcessor::BpmSource::saved: return bpm + " BPM (saved, press play)";
+        case OjuProcessor::BpmSource::none:  break;
+    }
+    return "Tempo: press play once";
+}
+
 juce::String OjuEditor::tileStatus (int id) const
 {
     auto val = [this] (const char* pid) { return ojuProcessor.getParameterValue (pid); };
@@ -696,7 +712,7 @@ void OjuEditor::timerCallback()
         deessInfo->set ((autoBand ? "Following the S's at " : "Split at ") + hzText (f > 0.0f ? f : ojuProcessor.getParameterValue (ids::tameFreq)));
     }
     if (tempoInfo != nullptr)
-        tempoInfo->set (juce::String (juce::roundToInt (ojuProcessor.getHostBpm())) + " BPM from the host");
+        tempoInfo->set (tempoText());
     if (outputInfo != nullptr)
     {
         const float rg = chain.riderGainDb.load();
@@ -746,8 +762,9 @@ void OjuEditor::timerCallback()
         linkText = "No beat linked";
     if (ojuProcessor.isReadingBeatFile())
         linkText = "Reading beat file...";
-    statusInfo.set ("CPU " + juce::String (ojuProcessor.getCpuLoad() * 100.0f, 1) + "% of a core",
-                    "Latency " + juce::String (ojuProcessor.getLatencySamples() * 1000.0 / sr, 1) + " ms",
+    statusInfo.set (tempoText(), ojuProcessor.getBpmSource() == OjuProcessor::BpmSource::live,
+                    "CPU " + juce::String (ojuProcessor.getCpuLoad() * 100.0f, 1) + "%  " + juce::String::fromUTF8 ("\xc2\xb7")
+                        + "  latency " + juce::String (ojuProcessor.getLatencySamples() * 1000.0 / sr, 1) + " ms",
                     linkText, linked);
 
     abButton.setToggleState (ojuProcessor.getActiveSlot() == 1, juce::dontSendNotification);
@@ -813,13 +830,12 @@ void OjuEditor::StatusInfo::paint (juce::Graphics& g)
     auto r = getLocalBounds().toFloat();
     drawRecess (g, r, 6.0f);
     auto inner = r.reduced (10.0f, 5.0f);
-    auto row1 = inner.removeFromTop (18.0f);
-    g.setFont (font (13.5f, true));
-    g.setColour (brassLight);
-    g.drawText (cpu, row1, juce::Justification::centredLeft);
+    g.setFont (font (14.0f, true));
+    g.setColour (tempoLive ? brassLight : boneDim);
+    g.drawFittedText (tempo, inner.removeFromTop (18.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
     g.setFont (font (13.0f));
     g.setColour (boneDim);
-    g.drawText (latency, inner.removeFromTop (16.0f), juce::Justification::centredLeft);
+    g.drawFittedText (load, inner.removeFromTop (16.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
 
     auto row2 = inner;
     OjuLookAndFeel::drawLamp (g, row2.removeFromLeft (22.0f).withSizeKeepingCentre (20.0f, 20.0f), linked, false, 0.8f);

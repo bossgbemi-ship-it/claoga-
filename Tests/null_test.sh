@@ -63,6 +63,28 @@ for take in "${TAKES[@]}"; do
   done
 done
 
+# Auto must make v1's decisions: the same take through v1's Listen and 2.0's Listen gives
+# the same values for every v1 parameter (EQ, Press, Heat, Space...). 2.0 modules are extra.
+apass=0; afail=0
+for take in "${TAKES[@]}"; do
+  name="$(basename "${take%.*}")"
+  for cfg in "${CONFIGS[@]}"; do
+    label="${cfg%%|*}"; opts="${cfg#*|}"
+    [[ "$opts" == *--listen* ]] || continue
+    base="$WORK/out/${name}_${label}_auto"
+    # shellcheck disable=SC2086
+    "$R1" --in "$take" --out "$base.v1.wav" $opts --save-state "$base.v1state" >/dev/null
+    # shellcheck disable=SC2086
+    "$R2" --in "$take" --out "$base.v2.wav" $opts --save-state "$base.v2state" >/dev/null
+    if result="$("$R2" --compare-params "$base.v1state" "$base.v2state")"; then
+      apass=$((apass+1)); echo "  [auto] $name / $label: $result"
+    else
+      afail=$((afail+1)); echo "  [FAIL] $name / $label: $result"
+    fi
+  done
+done
+
 echo
 echo "Null test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ]
+echo "Auto = v1 decisions: $apass passed, $afail failed"
+[ "$fail" -eq 0 ] && [ "$afail" -eq 0 ]

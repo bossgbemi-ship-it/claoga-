@@ -102,12 +102,17 @@ void KeyDetector::run()
             const double sr = sampleRate.load();
             auto consume = [&] (int start, int count)
             {
-                for (int i = 0; i < count; ++i)
+                // Slide the window a whole chunk at a time (at most one hop), not per sample.
+                const int hop = fftSize / 2;
+                for (int i = 0; i < count;)
                 {
-                    std::memmove (window.data(), window.data() + 1, sizeof (float) * (size_t) (fftSize - 1));
-                    window[(size_t) fftSize - 1] = fifoData[(size_t) (start + i)];
-                    filled = juce::jmin (filled + 1, fftSize);
-                    if (++sinceFrame >= fftSize / 2 && filled >= fftSize)
+                    const int take = std::min (count - i, std::max (1, hop - sinceFrame));
+                    std::memmove (window.data(), window.data() + take, sizeof (float) * (size_t) (fftSize - take));
+                    std::memcpy (window.data() + (fftSize - take), fifoData.data() + start + i, sizeof (float) * (size_t) take);
+                    filled = std::min (filled + take, fftSize);
+                    sinceFrame += take;
+                    i += take;
+                    if (sinceFrame >= hop && filled >= fftSize)
                     {
                         sinceFrame = 0;
                         // ~30 s memory, so the key follows the song without jumping around

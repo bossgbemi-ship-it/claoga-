@@ -69,6 +69,12 @@ public:
     bool isV1Compare() const noexcept    { return v1Compare.load(); }
     double getCurrentSampleRate() const noexcept { return currentRate.load(); }
     double getHostBpm() const noexcept           { return hostBpm.load(); }
+    // Where the tempo came from: the DAW (live), the last tempo saved with the session, or nothing yet.
+    enum class BpmSource { none, saved, live };
+    BpmSource getBpmSource() const noexcept
+    {
+        return hostBpmLive.load() ? BpmSource::live : (savedBpm > 0.0 ? BpmSource::saved : BpmSource::none);
+    }
 
     VocalChain& getChain() noexcept { return engine.getChain(); }
     Engine& getEngine() noexcept    { return engine; }
@@ -143,6 +149,8 @@ private:
     std::atomic<float> cpuLoad { 0.0f };
 
     std::atomic<double> hostBpm { 120.0 }, currentRate { 48000.0 };
+    std::atomic<bool> hostBpmLive { false };   // the DAW has told us its tempo this session
+    double savedBpm = 0.0;                      // message thread: tempo stored with the session
 
     // Message-thread state
     Features features;

@@ -200,6 +200,7 @@ void Listener::startCapture()
     captureRate = sampleRate.load();
     frameLength = juce::jmax (64, (int) std::round (captureRate * 0.02));
     framesDone = voicedFrames = 0;
+    v1CutSamples = v1CutFrames = 0;
     noiseFloorDb = -60.0f;
 
     capture.clear();
@@ -257,6 +258,12 @@ void Listener::run()
 
             const double target = captureMode == 1 ? extremeSeconds : naturalSeconds;
             const double voicedSeconds = voicedFrames * frameLength / captureRate;
+            const double v1Target = captureMode == 1 ? v1ExtremeSeconds : v1NaturalSeconds;
+            if (v1CutSamples == 0 && voicedSeconds >= v1Target)
+            {
+                v1CutSamples = capture.size();   // exactly the audio v1 analysed when it stopped here
+                v1CutFrames = voiced.size();
+            }
             progress.store ((float) juce::jmin (1.0, voicedSeconds / target));
 
             const bool enough = voicedSeconds >= target;
@@ -274,6 +281,21 @@ void Listener::run()
                 {
                     state.store ((int) State::analysing);
                     auto f = analyse (capture, voiced, frameLength, captureRate, captureMode);
+                    if (v1CutSamples > 0 && v1CutSamples < capture.size())
+                    {
+                        // v1's decisions from v1's window; 2.0's reads from the whole listen
+                        const std::vector<float> head (capture.begin(), capture.begin() + (std::ptrdiff_t) v1CutSamples);
+                        const std::vector<char> headVoiced (voiced.begin(), voiced.begin() + (std::ptrdiff_t) v1CutFrames);
+                        auto v1 = analyse (head, headVoiced, frameLength, captureRate, captureMode);
+                        if (v1.valid)
+                        {
+                            v1.noiseFloorDb = f.noiseFloorDb;
+                            v1.keyRoot = f.keyRoot;
+                            v1.keyMinor = f.keyMinor;
+                            v1.keyConfidence = f.keyConfidence;
+                            f = v1;
+                        }
+                    }
                     {
                         const juce::ScopedLock sl (resultLock);
                         result = f;

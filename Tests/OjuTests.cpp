@@ -402,6 +402,37 @@ static void testStateRoundTrip()
     setParam (*q, oju::ids::style, 2.0f);   // R&B
     q->pumpMessageThreadWork();
     check (std::abs (getParam (*q, oju::ids::reverbMix) - before) > 0.5f, "style change re-targets settings");
+
+    // The DAW's tempo: shown as soon as the host gives it, and remembered with the session
+    {
+        struct FixedTempo : juce::AudioPlayHead
+        {
+            juce::Optional<PositionInfo> getPosition() const override
+            {
+                PositionInfo info;
+                info.setBpm (93.0);
+                return info;
+            }
+        } tempo;
+        auto r = makeProcessor (48000.0, 256);
+        check (r->getBpmSource() == oju::OjuProcessor::BpmSource::none, "no tempo claimed before the DAW gives one");
+        r->setPlayHead (&tempo);
+        juce::AudioBuffer<float> buf (2, 256);
+        buf.clear();
+        juce::MidiBuffer midi;
+        r->processBlock (buf, midi);
+        r->pumpMessageThreadWork();
+        check (r->getBpmSource() == oju::OjuProcessor::BpmSource::live && std::abs (r->getHostBpm() - 93.0) < 1.0e-6,
+               "tempo read from the DAW (93 BPM)");
+        r->setPlayHead (nullptr);
+        juce::MemoryBlock tb;
+        r->getStateInformation (tb);
+        auto s2 = makeProcessor (48000.0, 256);
+        s2->setStateInformation (tb.getData(), (int) tb.getSize());
+        s2->pumpMessageThreadWork();
+        check (s2->getBpmSource() == oju::OjuProcessor::BpmSource::saved && std::abs (s2->getHostBpm() - 93.0) < 1.0e-6,
+               "tempo remembered with the session, before the DAW plays");
+    }
 }
 
 static void testMono()
@@ -718,6 +749,26 @@ static void testPhase1Modules()
         const float spreadOff = measure (false), spreadOn = measure (true);
         check (spreadOn < spreadOff - 4.0f, "rider evens the level: verse-to-hook jump " + juce::String (spreadOff, 1)
                                             + " dB -> " + juce::String (spreadOn, 1) + " dB");
+
+        // ...but never pushes up the room, breaths and word tails between phrases
+        auto noisy = v2::singer (sr, -16.0f, 6.0);
+        juce::Random rng (5);
+        for (int i = 0; i < noisy.getNumSamples(); ++i)
+        {
+            const float nz = (rng.nextFloat() * 2.0f - 1.0f) * 0.003f;   // about -55 dBFS room
+            for (int c = 0; c < 2; ++c) noisy.setSample (c, i, noisy.getSample (c, i) + nz);
+        }
+        auto gapLevel = [&] (bool rider)
+        {
+            auto p = makeProcessor (sr, 256); v2::neutral (*p);
+            setParam (*p, oju::ids::riderOn, rider ? 1.0f : 0.0f);
+            setParam (*p, oju::ids::riderAmount, 100.0f);
+            p->pumpMessageThreadWork();
+            const auto out = v2::run (*p, noisy, 256, finite);
+            return v2::rmsDb (out, (int) (5.5 * sr), (int) (0.4 * sr));
+        };
+        const float gapOff = gapLevel (false), gapOn = gapLevel (true);
+        check (gapOn - gapOff < 1.0f, "rider leaves the gaps alone (" + juce::String (gapOn - gapOff, 2) + " dB)");
     }
 
     // ---- "v1" compare reproduces the v1 sound exactly, whatever 2.0 modules are on
@@ -1150,8 +1201,11 @@ static void testPhase4Tune()
             const auto out = v2::run (*p, in, 256, finite);
             double err = 0, clar = 0; int cnt = 0;
             for (auto& pt : tune::track (out, sr, p->getLatencySamples()))
+            {
                 if (pt.t > 0.3 && pt.t < c.seconds - 0.3) { err += tune::centsOff (pt.midi, keyA, 2); clar += pt.clarity; ++cnt; }
-            err /= juce::jmax (1, cnt); clar /= juce::jmax (1, cnt);
+            }
+            err /= juce::jmax (1, cnt);
+            clar /= juce::jmax (1, cnt);
             check (err < 6.0 && clar > 0.8, juce::String ("sustained ") + c.name + ": " + juce::String (err, 1) + " cents from the note, clarity "
                                              + juce::String (clar, 2) + " (clean periodic sound)");
         }
@@ -1289,6 +1343,18 @@ static void testPhase4Tune()
             sameNotes &= oju::Tuner::noteInScale (pc, key, scale) == oju::Tuner::noteInScale (pc, 7, 1);
         check (getParam (*p, oju::ids::tuneOn) > 0.5f && sameNotes,
                "Auto heard the melody's key: " + oju::keyNames()[key] + " " + oju::scaleNames()[scale].toLowerCase() + " (sung in G minor)");
+        check (getParam (*p, oju::ids::tuneSpeed) <= 35.0f && getParam (*p, oju::ids::tuneHumanize) >= 60.0f,
+               "Auto's Tune is gentle and natural (speed " + juce::String (getParam (*p, oju::ids::tuneSpeed), 0)
+                   + ", humanize " + juce::String (getParam (*p, oju::ids::tuneHumanize), 0) + ")");
+        // Auto keeps v1's sound: only cleanup jobs on top, nothing that reshapes the vocal
+        check (getParam (*p, oju::ids::doubleOn) < 0.5f && getParam (*p, oju::ids::levelOn) < 0.5f,
+               "Auto leaves Double and the Leveler off");
+        check (getParam (*p, oju::ids::verbType) < 0.5f && getParam (*p, oju::ids::verbDuck) < 0.5f
+                   && getParam (*p, oju::ids::echoDuck) < 0.5f,
+               "Auto keeps v1's Space (classic reverb, no ducking)");
+        check (getParam (*p, oju::ids::plosiveOn) > 0.5f && getParam (*p, oju::ids::deessAuto) > 0.5f
+                   && getParam (*p, oju::ids::limiterOn) > 0.5f,
+               "Auto turns on the cleanup jobs (plosives, S's, safety limiter)");
         printRead (*p);
     }
 
@@ -1520,6 +1586,22 @@ int main (int argc, char** argv)
     const auto outDir = argc > 1 ? juce::File (juce::String (argv[1])) : juce::File::getCurrentWorkingDirectory();
 
     std::puts ("OJU test runner");
+
+    // OJU_ONLY=phase1 (or listen, state, cpu, phase2..phase5): run just that group
+    if (const auto only = juce::SystemStats::getEnvironmentVariable ("OJU_ONLY", {}); only.isNotEmpty())
+    {
+        const std::pair<const char*, void (*)()> groups[] = {
+            { "listen", [] { testListenNatural(); testListenExtremeAndStyles(); } }, { "latency", testLatencyAndAmount },
+            { "cpu", testCpu }, { "state", testStateRoundTrip }, { "mono", testMono },
+            { "phase1", testPhase1Modules }, { "phase2", testPhase2Modules }, { "phase3", testPhase3Denoise },
+            { "phase4", testPhase4Tune }, { "phase5", testPhase5BeatLink } };
+        for (const auto& g : groups)
+            if (only == g.first)
+                g.second();
+        std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");
+        return failures == 0 ? 0 : 1;
+    }
+
     testListenNatural();
     testListenExtremeAndStyles();
     testLatencyAndAmount();

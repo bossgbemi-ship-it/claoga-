@@ -7,6 +7,9 @@
 //   render   --in take.wav --out out.wav [--block N] [--style N] [--mode N] [--listen]
 //            [--save-state file] [--load-state file]
 //   compare  --compare a.wav b.wav        (exit 0 only if bit-identical)
+//   params   --compare-params a b         (exit 0 if every parameter in preset a has the same
+//                                          value in preset b, within one rounding step;
+//                                          e.g. v1's Auto vs 2.0's Auto)
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -85,6 +88,43 @@ namespace
                      juce::Decibels::gainToDecibels (maxDiff, -300.0));
         return 1;
     }
+
+    int compareParams (const juce::File& a, const juce::File& b)
+    {
+        auto load = [] (const juce::File& f)
+        {
+            juce::MemoryBlock mb;
+            f.loadFileAsData (mb);
+            return juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+        };
+        auto x = load (a), y = load (b);
+        if (x == nullptr || y == nullptr)
+        {
+            std::printf ("compare-params: cannot read presets\n");
+            return 2;
+        }
+        juce::StringArray diffs;
+        for (auto* pa : x->getChildWithTagNameIterator ("PARAM"))
+        {
+            const auto id = pa->getStringAttribute ("id");
+            auto* pb = y->getChildByAttribute ("id", id);
+            const auto va = pa->getStringAttribute ("value");
+            const auto vb = pb != nullptr ? pb->getStringAttribute ("value") : juce::String ("(missing)");
+            // Listening runs on a thread, so v1 itself wobbles by one rounding step from run to
+            // run (0.5 dB, 10 Hz...). Allow that; a real change of decision is far bigger.
+            const float fa = va.getFloatValue(), fb = vb.getFloatValue();
+            const bool close = std::abs (fa - fb) <= std::max (0.5f, 0.1f * std::max (std::abs (fa), std::abs (fb))) + 1.0e-4f;
+            if (pb == nullptr || ! close)
+                diffs.add (id + " " + va + " -> " + vb);
+        }
+        if (diffs.isEmpty())
+        {
+            std::printf ("SAME DECISIONS\n");
+            return 0;
+        }
+        std::printf ("DIFFERENT DECISIONS: %s\n", diffs.joinIntoString (", ").toRawUTF8());
+        return 1;
+    }
 }
 
 int main (int argc, char** argv)
@@ -93,6 +133,12 @@ int main (int argc, char** argv)
     juce::StringArray args;
     for (int i = 1; i < argc; ++i)
         args.add (argv[i]);
+
+    if (args.contains ("--compare-params"))
+    {
+        const int i = args.indexOf ("--compare-params");
+        return i + 2 < args.size() ? compareParams (juce::File (args[i + 1]), juce::File (args[i + 2])) : 2;
+    }
 
     if (args.contains ("--compare"))
     {
@@ -154,8 +200,7 @@ int main (int argc, char** argv)
                 pos = (pos + block) % input.getNumSamples();
                 p.processBlock (buf, midi);
                 p.pumpMessageThreadWork();
-                if ((guard & 7) == 0)
-                    juce::Thread::sleep (1);
+                juce::Thread::sleep (1);   // steady pace, so the listener drains small chunks
                 const auto st = p.getListenState();
                 if (st == oju::Listener::State::done || st == oju::Listener::State::failed)
                     break;

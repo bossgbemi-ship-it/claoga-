@@ -158,7 +158,8 @@ void VocalChain::prepare (double sampleRate, int maxBlockSize, int numChannels)
     echoRelCoef    = onePoleCoef (0.350, fs);
     verbRelCoef    = onePoleCoef (0.700, fs);
     riderEnvCoef   = onePoleCoef (0.020, fs);
-    riderTargetCoef = onePoleCoef (4.0, fs);
+    riderTargetCoef = onePoleCoef (10.0, fs);   // the song's level: a long memory
+    riderWarmCoef   = onePoleCoef (0.5, fs);    // ...learned quickly in the first second
     riderMoveCoef  = onePoleCoef (0.300, fs);
     preDelay.setSize (maxChannels, (int) std::ceil (fs * 0.06) + 4);
     verbDuckBuf.assign ((size_t) maxBlock, 0.0f);
@@ -202,7 +203,7 @@ void VocalChain::reset()
     levelEnvDb = -60.0f; levelTrackDb = -24.0f; levelGain = 0.0f;
     voiceEnv = 0.0f; echoDuckDb = verbDuckDb = 0.0f;
     preDelay.clear(); preDelayWrite = 0;
-    riderEnvDb = -80.0f; riderTargetDb = -20.0f; riderDb = 0.0f;
+    riderEnvDb = -80.0f; riderTargetDb = -200.0f; riderDb = 0.0f; riderMeanDb = 0.0f; riderWarm = 0;   // target: not learned yet
     lastVerbType = 0;
 }
 
@@ -726,13 +727,29 @@ void VocalChain::processChunk (juce::AudioBuffer<float>& buffer, int start, int 
                 pw = juce::jmax (pw, wetv[c] * wetv[c]);
             const float instDb = 4.3429448f * std::log (pw + 1.0e-12f);
             riderEnvDb = instDb + riderEnvCoef * (riderEnvDb - instDb);
-            if (riderEnvDb > -45.0f)
+            if (riderTargetDb < -150.0f && riderEnvDb > -60.0f)
+                riderTargetDb = riderEnvDb;   // learn the singer's level from the first sound
+            float want = 0.0f;                // gaps and silence: relax back to unity
+            if (riderTargetDb > -150.0f && riderEnvDb > std::max (-70.0f, riderTargetDb - 25.0f))
             {
-                riderTargetDb = riderEnvDb + riderTargetCoef * (riderTargetDb - riderEnvDb);
+                const bool warming = riderWarm < (int) fs;
+                riderWarm += warming ? 1 : 0;
+                riderTargetDb = riderEnvDb + (warming ? riderWarmCoef : riderTargetCoef) * (riderTargetDb - riderEnvDb);
                 const float range = 2.0f + 8.0f * riderAmt;
-                const float want = juce::jlimit (-range, range, riderTargetDb - riderEnvDb);
-                riderDb = want + riderMoveCoef * (riderDb - want);
+                want = riderTargetDb - riderEnvDb;
+                if (want > 0.0f)
+                {
+                    // Lift quiet words gently (half the range), and leave word tails, breaths and
+                    // room alone: anything 9-15 dB under the running level fades out of the lift.
+                    const float tailFade = juce::jlimit (0.0f, 1.0f, (15.0f - want) / 6.0f);
+                    want = juce::jmin (want, 0.5f * range) * tailFade;
+                }
+                want = juce::jlimit (-range, range, want);
+                // Even out the performance without making the whole vocal louder or quieter
+                riderMeanDb = want + riderTargetCoef * (riderMeanDb - want);
+                want = juce::jlimit (-range, range, want - riderMeanDb);
             }
+            riderDb = want + riderMoveCoef * (riderDb - want);
             const float gRide = 1.0f + mRide * (dbToGain (riderDb) - 1.0f);
             for (int c = 0; c < nch; ++c)
                 wetv[c] *= gRide;

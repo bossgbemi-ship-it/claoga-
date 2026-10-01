@@ -241,8 +241,7 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
     set (ids::delayMix, roundTo (p.echo * (extreme ? 1.2f : 1.0f) * 100.0f, 1.0f));
     set (ids::reverbSize, p.size * 100.0f);
     set (ids::reverbMix, roundTo (p.verb * (extreme ? 1.15f : 1.0f) * 100.0f, 1.0f));
-    lines.push_back ({ 1.8f, "Space on " + delayDivisionNames()[division] + " at " + juce::String (juce::roundToInt (bpm)) + " BPM, "
-                             + verbTypeNames()[p2.verbType].toLowerCase() + " verb that blooms in the gaps" + dash() + p.flavour });
+    lines.push_back ({ 1.8f, "Space on " + delayDivisionNames()[division] + " at " + juce::String (juce::roundToInt (bpm)) + " BPM" + dash() + p.flavour });
 
     // ---- Master
     set (ids::amount, 100.0f);
@@ -270,42 +269,46 @@ BrainResult decide (const Features& f, int styleIndex, int mode, double bpm)
         }
     }
 
+    // Cleanup only. Auto keeps v1's sound (EQ, Press, Heat, Space exactly as v1 chose them)
+    // and adds just the gentle repair jobs on top: plosives, S's, breaths, level, a safety ceiling.
+    // The sound-shaping 2.0 modules (Leveler, Double, reverb types, ducking) wait for the artist.
     set (ids::plosiveOn, 1.0f);
     set (ids::plosiveAmount, extreme ? 70.0f : 50.0f);
     set (ids::deessAuto, 1.0f);
 
-    set (ids::levelOn, 1.0f);
-    set (ids::levelAmount, roundTo (p2.level * 100.0f * (extreme ? 1.2f : 1.0f), 1.0f));
+    set (ids::levelOn, 0.0f);
+    set (ids::levelAmount, roundTo (p2.level * 100.0f, 1.0f));
 
     set (ids::breathOn, 1.0f);
-    set (ids::breathAmount, roundTo (p2.breath * 100.0f * (extreme ? 1.25f : 1.0f), 1.0f));
+    set (ids::breathAmount, roundTo (p2.breath * 100.0f * (extreme ? 0.9f : 0.6f), 1.0f));
 
-    set (ids::doubleOn, 1.0f);
-    set (ids::doubleAmount, roundTo (p2.dbl * 100.0f * (extreme ? 1.2f : 1.0f), 1.0f));
+    set (ids::doubleOn, 0.0f);
+    set (ids::doubleAmount, roundTo (p2.dbl * 100.0f, 1.0f));
     set (ids::width, roundTo (p2.width * 100.0f, 1.0f));
     set (ids::hookOnly, p2.hookOnly ? 1.0f : 0.0f);
 
     set (ids::echoOn, 1.0f);
     set (ids::verbOn, 1.0f);
-    set (ids::echoDuck, roundTo (p2.echoDuck * 100.0f, 1.0f));
-    set (ids::verbType, (float) p2.verbType);
-    set (ids::verbDuck, roundTo (p2.verbDuck * 100.0f, 1.0f));
+    set (ids::echoDuck, 0.0f);
+    set (ids::verbType, 0.0f);
+    set (ids::verbDuck, 0.0f);
 
     set (ids::riderOn, 1.0f);
-    set (ids::riderAmount, roundTo (p2.rider * 100.0f, 1.0f));
+    set (ids::riderAmount, roundTo (p2.rider * 100.0f * (extreme ? 0.8f : 0.5f), 1.0f));
     set (ids::limiterOn, 1.0f);
     set (ids::limiterCeiling, -1.0f);
 
-    set (ids::tuneSpeed, extreme ? juce::jmin (100.0f, p2.tuneSpeed + 20.0f) : p2.tuneSpeed);
-    set (ids::tuneHumanize, extreme ? juce::jmax (0.0f, p2.humanize - 20.0f) : p2.humanize);
-    set (ids::tuneMix, extreme ? 100.0f : 80.0f);
-    if (f.keyRoot >= 0 && f.keyConfidence > 0.35f)
+    // Tune: gentle and natural, and only when the melody's key is clear
+    set (ids::tuneSpeed, extreme ? juce::jmin (100.0f, p2.tuneSpeed + 20.0f) : juce::jmin (35.0f, p2.tuneSpeed));
+    set (ids::tuneHumanize, extreme ? juce::jmax (0.0f, p2.humanize - 20.0f) : juce::jmax (60.0f, p2.humanize));
+    set (ids::tuneMix, extreme ? 100.0f : 75.0f);
+    if (f.keyRoot >= 0 && f.keyConfidence > 0.5f)
     {
         set (ids::tuneOn, 1.0f);
         set (ids::tuneKey, (float) f.keyRoot);
         set (ids::tuneScale, f.keyMinor ? 1.0f : 0.0f);
         lines.push_back ({ 4.5f, "Your melody sits in " + keyNames()[f.keyRoot] + (f.keyMinor ? " minor" : " major")
-                                 + dash() + "Tune on, " + (extreme ? "tight" : "gentle") + " retune" });
+                                 + dash() + "Tune on, " + (extreme ? "tight" : "gentle and natural") + " retune" });
     }
     else
     {

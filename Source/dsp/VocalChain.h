@@ -189,8 +189,10 @@ private:
 
     // Output: vocal rider
     Lin riderMix;
-    float riderAmt = 0.5f, riderEnvDb = -80.0f, riderTargetDb = -20.0f, riderDb = 0.0f;
-    float riderEnvCoef = 0.0f, riderTargetCoef = 0.0f, riderMoveCoef = 0.0f;
+    float riderAmt = 0.5f, riderEnvDb = -80.0f, riderTargetDb = -200.0f, riderDb = 0.0f;
+    float riderEnvCoef = 0.0f, riderTargetCoef = 0.0f, riderWarmCoef = 0.0f, riderMoveCoef = 0.0f;
+    float riderMeanDb = 0.0f;   // long-term average move, taken back out so the rider is level-neutral
+    int riderWarm = 0;          // samples of singing heard since the target was first learned
 };
 
 } // namespace oju

@@ -36,7 +36,13 @@ Built with C++17, JUCE 8.0.15 (pinned through CMake FetchContent) and CMake. All
 
 ## Global controls
 
-- **Auto (the eye):** listens to 10 s of real singing and sets every module. It also hears the key of your melody. The Read explains each move.
+- **Auto (the eye):** listens to 10 s of real singing. **It keeps the v1 sound**: the EQ, Press, Heat and Space choices are exactly the ones v1 makes, from the same first 4 s of singing. On top, it adds only gentle cleanup:
+  - plosive tamer, the auto de-esser band, gentle breath control, a level-neutral rider and the -1 dB safety limiter
+  - Denoise only when the room is noisy
+  - **Tune, gentle and natural** (slow retune, high Humanize), only when it clearly hears your melody's key
+
+  Double, the Leveler, the room/plate/hall reverbs and delay/reverb ducking stay off until you turn them on. The Read explains each move.
+- **Tempo:** OJU reads the BPM from your DAW (Ableton, Logic, Reaper, FL...) and shows it in the status panel with where it came from. It's saved with your session, so it shows the right tempo on reload, even before you press play. If no tempo has arrived yet, it says "press play once": some DAWs only send it while the track plays or is armed.
 - **Genre:** Afrobeats, Rap, R&B, Amapiano or Gospel. The v1 styles Trap, Pop and Soul are still in the Presets menu.
 - **Natural / Extreme:** applies across all modules, and every module can still be tweaked.
 - **Track / Mix:**
@@ -170,16 +176,19 @@ The script builds the frozen OJU v1 source (v1's commit `d94ea22`, tagged `oju-v
 
 Each v2 render loads the v1 preset, with all 2.0 modules off, and must match v1 **to the last bit**. Synthetic takes are always included, so it runs even with an empty folder. It passed 16/16 after each of the five build phases.
 
+It also checks that **Auto makes v1's decisions**: each take goes through v1's Auto and 2.0's Auto, and every v1 setting (EQ, Press, Heat, Space...) must match within one rounding step (v1 itself wobbles by one step from run to run).
+
 ### The test runner
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DOJU_BUILD_TESTS=ON
 cmake --build build --target OJUTests
 build/OJUTests_artefacts/Release/OJUTests <folder-for-screenshots>
+OJU_ONLY=phase1 build/OJUTests_artefacts/Release/OJUTests   # just one group: listen, state, cpu, phase1..phase5
 ```
 
 The synthetic singer is a gliding voice with formants, a mud resonance, S bursts, breaths and noise. The runner checks v1 behaviour (Listen, ragged blocks, allocation guard, latency, state) plus every 2.0 module:
-- **Cleanup/Output:** the plosive pop comes down 8 dB while the voice is untouched; the limiter holds -1.00 dBFS; the rider evens a 16 dB verse/hook jump to 10.5 dB.
+- **Cleanup/Output:** the plosive pop comes down 8 dB while the voice is untouched; the limiter holds -1.00 dBFS; the rider evens a 16 dB verse/hook jump to about 11 dB without lifting the gaps between phrases.
 - **De-esser:** auto band finds the S's.
 - **Delay/Reverb:** delay ducks 18 dB while singing; the reverb types ring as expected.
 - **Compress:** the leveler evens the level.

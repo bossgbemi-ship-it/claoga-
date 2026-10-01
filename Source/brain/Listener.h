@@ -46,7 +46,11 @@ public:
     // Also used by OJU Beat (chroma). Returns root (0..11) and sets minor/confidence.
     static int estimateKey (const std::array<double, 12>& histogram, bool& minor, float& confidence);
 
-    static constexpr double naturalSeconds = 10.0, extremeSeconds = 10.0;   // OJU 2.0: Auto listens for 10 s
+    // OJU 2.0: Auto listens for 10 s. In Natural mode the v1 decisions (EQ, Press, Heat, Space...)
+    // still come from exactly what v1 heard: the first 4 s of singing. The rest of the 10 s only
+    // feeds the 2.0 reads (key, room noise), so the v1 sound is unchanged.
+    static constexpr double naturalSeconds = 10.0, extremeSeconds = 10.0;
+    static constexpr double v1NaturalSeconds = 4.0, v1ExtremeSeconds = 10.0;
 
 private:
     void run() override;
@@ -70,6 +74,7 @@ private:
     std::vector<float> frameDb;
     double captureRate = 48000.0;
     int frameLength = 960, framesDone = 0, voicedFrames = 0, captureMode = 0;
+    size_t v1CutSamples = 0, v1CutFrames = 0;   // where v1 would have stopped listening (0 = not yet)
     float noiseFloorDb = -60.0f;
 
     juce::CriticalSection resultLock;

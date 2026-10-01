@@ -198,7 +198,10 @@ void OjuProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
         if (auto pos = ph->getPosition())
             if (auto bpm = pos->getBpm())
                 if (*bpm > 20.0 && *bpm < 400.0)
+                {
                     hostBpm.store (*bpm, std::memory_order_relaxed);
+                    hostBpmLive.store (true, std::memory_order_relaxed);
+                }
 
     const int chans = juce::jmin (2, numIn, buffer.getNumChannels());
     const auto t0 = juce::Time::getHighResolutionTicks();
@@ -328,6 +331,14 @@ void OjuProcessor::timerCallback()
         setLatencySamples (lat);
 
     updateLink();
+
+    // Remember the DAW's tempo with the session, so it shows (and the delay is right) on reload
+    // even before the host plays.
+    if (hostBpmLive.load() && std::abs (hostBpm.load() - savedBpm) > 0.01)
+    {
+        savedBpm = hostBpm.load();
+        refreshExtraCache();
+    }
 
     // key read from a beat file (background job finished)
     {
@@ -654,6 +665,8 @@ void OjuProcessor::refreshExtraCache()
     }
 
     extra.setProperty ("keyOrigin", keyOrigin, nullptr);
+    if (savedBpm > 0.0)
+        extra.setProperty ("bpm", savedBpm, nullptr);
     extra.setProperty (activeAttr, activeSlot, nullptr);
     for (int i = 0; i < 2; ++i)
     {
@@ -738,6 +751,12 @@ void OjuProcessor::applyPendingExtra()
     }
 
     keyOrigin = extra.getProperty ("keyOrigin").toString();
+    if (const double bpm = extra.getProperty ("bpm", 0.0); bpm > 20.0 && bpm < 400.0)
+    {
+        savedBpm = bpm;
+        if (! hostBpmLive.load())
+            hostBpm.store (bpm);
+    }
     activeSlot = juce::jlimit (0, 1, (int) extra.getProperty (activeAttr, 0));
     slots[0] = {};
     slots[1] = {};
