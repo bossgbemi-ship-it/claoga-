@@ -31,12 +31,12 @@ Until OJU is code-signed, Windows and macOS each ask once before opening the ins
 | What | Where | Notes |
 |---|---|---|
 | **OJU 2.0 (current)** | branch **`main`** | All new work, builds, installers and releases come from here. |
-| **OJU v1 (frozen)** | branch **`v1`** and tag **`v1.0.0`** (commit `d94ea22`) | Kept exactly as first shipped. Nothing is ever committed to it. |
+| **OJU v1 (frozen)** | branch **`v1`** (commit `d94ea22`) | Kept exactly as first shipped. Nothing is ever committed to it. |
 | Work in progress | `claude/...` branches | Temporary. Each one is merged into `main` when it's done. |
 
 **v1 inside 2.0:** the v1 EQ, Saturate, Press, Space and Natural/Extreme code is wrapped unchanged inside 2.0, and v1 presets load in 2.0. The **v1** button in the plugin plays the pure v1 sound for an A/B.
 
-**How we know 2.0 didn't change the v1 sound:** the null test (`Tests/null_test.sh`) builds v1 straight from the `v1.0.0` commit and compares it with 2.0 bit for bit. It runs on every push.
+**How we know 2.0 didn't change the v1 sound:** the null test (`Tests/null_test.sh`) builds v1 straight from commit `d94ea22` and compares it with 2.0 bit for bit. It runs on every push.
 
 **Releases:** tag `main` with the next version (for example `v2.0.1`). CI builds both installers and publishes them on the Releases page.
 
