@@ -1,7 +1,12 @@
 name: Build and test
 
+# Builds, tests and makes the installers for the current OJU (main) and for work in
+# progress (claude/* branches). A tag like v2.0.1 also publishes a release.
+# The frozen v1 branch is not rebuilt here: the null test checks out v1 by itself.
 on:
   push:
+    branches: [main, 'claude/**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 

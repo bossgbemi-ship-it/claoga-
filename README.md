@@ -1,6 +1,6 @@
 # OJU 2.0 — the vocal chain that listens
 
-**Ojú** is Yoruba for *eye*. Press the brass eye (**Auto**), sing for 10 seconds, and OJU sets up all 12 modules of its vocal chain for you. Then it explains in plain English what it heard and what it changed. OJU 2.0 can also **hear the beat**: put a second copy on the beat track, and the vocal knows the key and gets room in the mix.
+**Ojú** is Yoruba for *eye*. Press the brass eye (**Auto**), sing for 10 seconds, and OJU sets up its 12-module vocal chain for you. Then it explains in plain English what it heard and what it changed. OJU 2.0 can also **hear the beat**: put a second copy on the beat track, and the vocal knows the key and gets room in the mix.
 
 Made by Joseph · [madebyjoseph.com](https://madebyjoseph.com) · Bundle ID `com.madebyjoseph.oju`
 
@@ -25,6 +25,20 @@ Every build on GitHub Actions makes both installers. They're under **Artifacts**
 Until OJU is code-signed, Windows and macOS each ask once before opening the installer. **[docs/INSTALL.md](docs/INSTALL.md)** has the step-by-step guide, including that one-time click-through.
 
 ---
+
+## Where v1 and v2 live
+
+| What | Where | Notes |
+|---|---|---|
+| **OJU 2.0 (current)** | branch **`main`** | All new work, builds, installers and releases come from here. |
+| **OJU v1 (frozen)** | branch **`v1`** and tag **`v1.0.0`** (commit `d94ea22`) | Kept exactly as first shipped. Nothing is ever committed to it. |
+| Work in progress | `claude/...` branches | Temporary. Each one is merged into `main` when it's done. |
+
+**v1 inside 2.0:** the v1 EQ, Saturate, Press, Space and Natural/Extreme code is wrapped unchanged inside 2.0, and v1 presets load in 2.0. The **v1** button in the plugin plays the pure v1 sound for an A/B.
+
+**How we know 2.0 didn't change the v1 sound:** the null test (`Tests/null_test.sh`) builds v1 straight from the `v1.0.0` commit and compares it with 2.0 bit for bit. It runs on every push.
+
+**Releases:** tag `main` with the next version (for example `v2.0.1`). CI builds both installers and publishes them on the Releases page.
 
 ## The chain (fixed order, every module has a lit on/off switch)
 

@@ -13,7 +13,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${1:-$ROOT/build-null}"
-V1_REF="${V1_REF:-d94ea2211ee1f780b1bcb39dedd7f6a9cce012ae}"   # OJU v1 (tag oju-v1.0.0)
+V1_REF="${V1_REF:-d94ea2211ee1f780b1bcb39dedd7f6a9cce012ae}"   # OJU v1 (tag v1.0.0, branch v1)
 V1_DIR="$BUILD/v1-src"
 WORK="$BUILD/null-work"
 
