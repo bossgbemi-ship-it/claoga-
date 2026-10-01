@@ -196,7 +196,7 @@ Tips:
 Tests/null_test.sh
 ```
 
-The script builds the frozen OJU v1 source (v1's commit `d94ea22`, tagged `oju-v1.0.0`) and the current source with identical compiler settings. It then renders every take through both:
+The script builds the frozen OJU v1 source (v1's commit `d94ea22`, the `v1` branch) and the current source with identical compiler settings. It then renders every take through both:
 - a default preset
 - presets made by v1's own Listen in several styles and modes
 - block sizes 512 and 333
